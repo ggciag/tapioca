@@ -1,4 +1,4 @@
-# TapIOca
+# tapIOca
 
 TapIOca is a python package with tools for pre- and post-processing of [Mandyoc](https://github.com/ggciag/mandyoc) models.
 
@@ -12,6 +12,17 @@ Future implementations of tapIOca are planned to include:
 - Frameworks to facilitate scenarios creation;
 - Specialised plotting functions (xarray and matplotlib functions are working);
 - New post-processing tools;
+
+## How to install
+
+The current recommended way to install tapIOca is cloning this repository, creating a conda environment and installing the source code:
+
+```
+git clone https://github.com/ggciag/tapioca.git
+cd tapioca
+conda env create -f environment.yml -y
+pip install -e .
+```
 
 ## Contributing
 

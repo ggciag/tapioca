@@ -264,14 +264,14 @@ class MandyocScen:
         return self
         
     
-    def selectParticles_bycoords(self, xlim=None, ylim=None, tsel=None, 
+    def selectParticles_bycoords(self, xlim=None, zlim=None, tsel=None, 
                                  select_original=True,selected_name='',selection_name='',replace_original=False):
         '''
-        coords : list = [[xmin, xmax],[ymin,ymax]]
+        coords : list = [[xmin, xmax],[zmin,zmax]]
         '''
         
         if xlim is None: xlim = self.xlimits
-        if ylim is None: ylim = self.zlimits
+        if zlim is None: zlim = self.zlimits
 
         pts, selected_name = self._get_pts(select_original, selected_name)
             
@@ -281,7 +281,7 @@ class MandyocScen:
         condX = ((pts["x"] >= xlim[0]) & (pts["x"] <= xlim[1])).compute()
         pts =  pts.where(condX, drop=True)
         
-        condZ = ((pts["z"] >= ylim[0]) & (pts["z"] <= ylim[1])).compute()
+        condZ = ((pts["z"] >= zlim[0]) & (pts["z"] <= zlim[1])).compute()
         pts =  pts.where(condZ, drop=True)
         ids = pts.id.values
               

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -20,7 +20,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
-    "Topic :: Geodynamics ::Scientific/Engineering :: Physics",
+    "Topic :: Intended Audience :: Science/Research",
+    
 ]
 
 dependencies = [

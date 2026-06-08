@@ -2,6 +2,8 @@ import warnings
 import xarray as xr
 import numpy as np
 
+__version__ = "0.1.0"
+
 # 1. Import variables
 from ._variables import *
 
@@ -18,3 +20,4 @@ with warnings.catch_warnings(): #filtering warning for the preexisting attribute
 
 # 4. Import utils functions
 from ._aux_functions import *
+

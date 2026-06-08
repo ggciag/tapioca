@@ -4,6 +4,7 @@ channels:
   - defaults
 dependencies:
   - python
+  - pip
   - matplotlib
   - xarray >= 2025
   - pyvista
