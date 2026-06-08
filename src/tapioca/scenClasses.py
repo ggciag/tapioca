@@ -53,7 +53,7 @@ class MandyocScen:
             print(f'time limits: {self.tlimits}')
         
         self.z_corrected = False
-        self.particles_load = False
+        self.particles_loaded = False
         
         # Initialize the empty DataTree
         self.DTree = DataTree()
@@ -95,7 +95,7 @@ class MandyocScen:
             
         # Loading particles
         if load_particles:
-            self._load_particles(particles_file, chunks={'id': 'auto'}, filter_air=True)
+            self._load_particles(particles_file, chunks={'id': 'auto'}, filter_air=filter_air)
             
         if self.verbose: print(f"Particles [{particles_file}] loaded")
             
@@ -211,8 +211,10 @@ class MandyocScen:
                 
             cond = particles != air
             particles = particles.where(cond)
+            if verbose: print(f'Air particles filtered [{air}]')
             
         self.DTree['/particles/original'] = particles
+        self.particles_loaded = True
         return True
     
     
