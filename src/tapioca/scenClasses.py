@@ -145,6 +145,7 @@ class MandyocScen:
             node_ds = self.DTree['/mesh'][node].ds
             self.DTree['/mesh'][node] = node_ds.assign_coords(z=(node_ds['z'] - factor))
         
+        # Add a If condition for when the used does not load all data types
         for node in surface_nodes:    #O script em julia está exportando com a superfície corrigida, mudar para exportar com o dado ORIGINAL
             node_ds = self.DTree['/surface'][node].ds
             self.DTree['/surface'][node] = node_ds.assign(surface=(node_ds['surface'] - factor))

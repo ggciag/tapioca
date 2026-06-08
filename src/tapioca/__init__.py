@@ -12,6 +12,12 @@ from ._variables import SEC_PER_YEAR, VARIABLES_LIST, VARS_TYPES
 # 2. Import Scenario Classes
 from .scenClasses import MandyocScen
 
+# 3. Importing post processing objects and functions
+with catch_warnings(): #filtering warning for the preexisting attribute of the datatree accessor
+    filterwarnings("ignore", message=".*name 'postproc'.*")
+    # 3. Import post-processing classes and functions
+    from .post_processing import *
+
 # 5. Import plotting functions
 
 
