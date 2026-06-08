@@ -1,6 +1,21 @@
 # TapIOca
 
-Tools for post-processing and visualization for [Mandyoc](https://github.com/ggciag/mandyoc).
+TapIOca is a python package with tools for pre- and post-processing of [Mandyoc](https://github.com/ggciag/mandyoc) models.
+
+## About
+
+The current version (v0.1.0) of tapIOca enables the manipulation of Mandyoc outputs from .nc files.
+These netCDF files must be created from text file outputs containing the "x", "z" and "time" dimensions. Future versions of Mandyoc will natively support these output formats. In the meantime, you can request Julia code to format your .txt data from [jbueno@usp.br](mailto:jbueno@usp.br).
+
+Future implementations of tapIOca are planned to include:
+- A basic usage guide;
+- Frameworks to facilitate scenarios creation;
+- Specialised plotting functions (xarray and matplotlib functions are working);
+- New post-processing tools;
+
+## Contributing
+
+This package is still in its early stages, so **contributions are welcome**. You can contribute by: sharing your own functions and methods, **reporting bugs or malfunctions**, suggesting new features and approaches for managing Mandyoc data.
 
 ## License
 

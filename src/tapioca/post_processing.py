@@ -9,7 +9,7 @@ import pandas as pd
 import xarray as xr
 from xarray import DataTree, register_datatree_accessor
 
-from _variables import _varsTypes
+from ._variables import _varsTypes
 
 # Post processing objects and functions
 @register_datatree_accessor("postproc")

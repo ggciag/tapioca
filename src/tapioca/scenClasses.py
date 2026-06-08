@@ -9,7 +9,7 @@ import pandas as pd
 import xarray as xr
 from xarray import DataTree, register_datatree_accessor
 
-from _variables import _varsTypes
+from ._variables import _varsTypes
 
 #Mandyoc Scenario class
 class MandyocScen:
