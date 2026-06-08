@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tapioca-mandyoc"  
+version = "0.1.0"
+description = "Output management and post-processing for Mandyoc geodynamic models based on xarray and DataTrees."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+
+authors = [
+  {name = "João Bueno", email = "jbueno@usp.br"},
+  {name = "João Pedro  M. Silva", email="joao.macedo.silva@usp.br" },
+  {name = "Rafael M. Silva", email = "rafael.m.silva@alumni.usp.br"},
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Topic :: Geodynamics ::Scientific/Engineering :: Physics",
+]
+
+dependencies = [
+    "numpy",
+    "xarray>=2025.0.0",
+    "matplotlib",
+    "scipy",
+    "netCDF4",     
+    "shapely",
+    "astropy",
+    "pymp-pypi",
+    "numba",
+    "dask"
+]
+
+
+# Future implementations!!
+[project.optional-dependencies]
+viz = [
+    "pyvista",
+    "pythreejs",
+    "ipyvtklink",
+    "jupyterlab",
+    "ipython"
+]
+
+docs = [
+    "mkdocs-material>=9.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
