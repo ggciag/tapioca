@@ -9,13 +9,13 @@ import pandas as pd
 import xarray as xr
 from xarray import DataTree, register_datatree_accessor
 
-from ._variables import _varsTypes
+from ._variables import VARS_TYPES, SEC_PER_YEAR, VARIABLES_LIST
 
 # Post processing objects and functions
 @register_datatree_accessor("postproc")
 class scenPostProcessing:
 
-    def __init__(self, mandyocScen_DTree, varsTypes=_varsTypes):
+    def __init__(self, mandyocScen_DTree, varsTypes=VARS_TYPES):
         '''
         It is a class to calculate common post-processing variables on a loaded scenario
         '''

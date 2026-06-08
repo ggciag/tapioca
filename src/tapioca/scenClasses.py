@@ -9,7 +9,7 @@ import pandas as pd
 import xarray as xr
 from xarray import DataTree, register_datatree_accessor
 
-from ._variables import _varsTypes
+from ._variables import VARS_TYPES, VARIABLES_LIST
 
 #Mandyoc Scenario class
 class MandyocScen:
@@ -403,7 +403,7 @@ class MandyocScen:
 @register_datatree_accessor("postproc")
 class scenPostProcessing:
 
-    def __init__(self, mandyocScen_DTree, varsTypes=_varsTypes):
+    def __init__(self, mandyocScen_DTree, varsTypes=VARS_TYPES):
         '''
         It is a class to calculate common post-processing variables on a loaded scenario
         '''
