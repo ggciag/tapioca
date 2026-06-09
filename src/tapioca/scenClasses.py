@@ -72,7 +72,7 @@ class MandyocScen:
                 standard_datasets.append(ds)
         
         if standard_datasets:
-            self.DTree['/mesh/original'] = xr.merge(standard_datasets)
+            self.DTree['/mesh/original'] = xr.merge(standard_datasets, join='outer')
 
         if self.verbose: print(f"Variables loaded: {' '.join(variables)}")
         
