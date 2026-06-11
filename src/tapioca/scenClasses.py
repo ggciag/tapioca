@@ -56,7 +56,7 @@ class MandyocScen:
         self.particles_loaded = False
         
         # Initialize the empty DataTree
-        self.DTree = DataTree()
+        self.DTree = DataTree.from_dict( {"mesh":None,"surface":None,"particles":None})
 
         # Passing some metadata to the DataTree
         self.DTree.attrs['name'] = self.name
@@ -98,10 +98,6 @@ class MandyocScen:
             self._load_particles(particles_file, chunks={'id': 'auto'}, filter_air=filter_air, air_layer=air_layer)
             
         if self.verbose: print(f"Particles [{particles_file}] loaded")
-            
-        #self.original_particles = None   #whole particles dataset (can be replaced for subsets)
-        self.selected_particles = None   #current selected particles
-        self.particles = {}  #dictionary with particle selections
         
         return None
     
@@ -222,12 +218,22 @@ class MandyocScen:
                                     selection_name=''):
         """
         Internal function to select a dataset by the IDs
+        Internal function to select a dataset by the IDs and store it in the DataTree.
         """
+        target_path = '/particles/selected'
+        if replace_original:
+            target_path = '/particles/original'
+        elif selection_name:
+            target_path = f'/particles/subsets/{selection_name}'
+
+        pts, _ = self._get_pts(selected_name=selected_name)
         
         if replace_original==True:
             selection_name = 'original'
         elif selection_name == '':
             selection_name = 'selected'
+        # Seleção puramente lazy
+        self.DTree[target_path] = pts.sel(id=valid_ids)
         
         source_ds = self.DTree.particles[selected_name].ds
     
