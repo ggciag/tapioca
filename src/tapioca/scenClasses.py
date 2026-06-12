@@ -10,6 +10,7 @@ import xarray as xr
 from xarray import DataTree, register_datatree_accessor
 
 from ._variables import VARS_TYPES, VARIABLES_LIST
+from ._aux_functions import read_params
 
 #Mandyoc Scenario class
 class MandyocScen:
@@ -25,6 +26,7 @@ class MandyocScen:
 
         # Setting directories and scen name
         self.path = Path(path)
+        self.params = read_params(os.path.join(path,'param.txt'))
         self.verbose = verbose
         if isinstance(name, str): self.name = name
         else: self.name = self.path.name
@@ -32,6 +34,7 @@ class MandyocScen:
         if self.verbose:
             print(f'Scenario at: {self.path}')
             print(f'Scenario name: {self.name}')
+            print(f'Params - Ok')
         
         # Handle Variables and Extract Metadata
         if isinstance(variables, str): variables = [variables]
@@ -213,34 +216,46 @@ class MandyocScen:
         self.particles_loaded = True
         return True
     
-    
-    def _apply_selection(self, valid_ids, replace_original=True, selected_name='',
-                                    selection_name=''):
+    # Future improvements: remove replace original, redudant if you can select "original"
+    # Replace "selected" and "selection" for "source" and "target/dest"
+    def _apply_selection(self, valid_ids, selected_name='', selection_name=''):
         """
-        Internal function to select a dataset by the IDs
         Internal function to select a dataset by the IDs and store it in the DataTree.
         """
-        target_path = '/particles/selected'
-        if replace_original:
-            target_path = '/particles/original'
-        elif selection_name:
-            target_path = f'/particles/subsets/{selection_name}'
 
-        pts, _ = self._get_pts(selected_name=selected_name)
-        
-        if replace_original==True:
-            selection_name = 'original'
-        elif selection_name == '':
-            selection_name = 'selected'
-        # Seleção puramente lazy
+        paths, names, pts = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
+        source_path, target_path = paths
+        selected_name, selection_name = names
+
+        if self.verbose:
+            print(f'Selected particles: {selected_name}')
+            print(f'Selection at: {selection_name}')
+
+        # Lazy selection
+        pts = self.DTree[source_path].ds
         self.DTree[target_path] = pts.sel(id=valid_ids)
-        
-        source_ds = self.DTree.particles[selected_name].ds
-    
-        self.DTree.particles[selection_name] = source_ds.sel(id=valid_ids)
     
         gc.collect()
         return None
+
+    def _eval_particles_selection(self,selected_name, selection_name, get_selection=False):
+        '''
+        [Ongoing]: Evaluate the selection names and paths  -for particles
+        '''
+
+        if len(selection_name) == 0:
+            selection_name = 'selected'
+        
+        elif len(selected_name) == 0:
+            selected_name = 'original'
+        
+        source_path = f'/particles/{selected_name}'
+        target_path = f'/particles/{selection_name}'
+
+        if get_selection:
+            return (source_path,target_path), (selected_name,selection_name), self.DTree[source_path].ds
+        else:
+            return (source_path,target_path), (selected_name,selection_name)
 
     def _get_pts(self, select_original=True, selected_name=''):
         if select_original==True: selected_name = 'original'
@@ -256,7 +271,9 @@ class MandyocScen:
         timerange : array-like = [tmin, tmax]
         '''
         # apply the support selection function
-        pts, selected_name = self._get_pts(select_original, selected_name)
+        paths, names,pts = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
+        source_path, target_path = paths
+        selected_name, selection_name = names
         
         # select particles based on two snapshots
         snap_0 = pts.sel(time=timerange[0], method='nearest').compute()
@@ -274,8 +291,7 @@ class MandyocScen:
             
         # apply the support selection function
         self._apply_selection(ids, 
-                              selected_name=selected_name, 
-                              replace_original=replace_original, 
+                              selected_name=selected_name,
                               selection_name=selection_name)
         return self
         
@@ -289,7 +305,9 @@ class MandyocScen:
         if xlim is None: xlim = self.xlimits
         if zlim is None: zlim = self.zlimits
 
-        pts, selected_name = self._get_pts(select_original, selected_name)
+        paths, names, pts = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
+        source_path, target_path = paths
+        selected_name, selection_name = names
             
         if tsel is None: tsel = 0
         
@@ -303,20 +321,21 @@ class MandyocScen:
               
         # apply the support selection function
         self._apply_selection(ids, 
-                              selected_name=selected_name, 
-                              replace_original=replace_original, 
+                              selected_name=selected_name,
                               selection_name=selection_name)
         
         return self
     
     
-    def selectParticles_bylayers(self, layers, tsel=None, 
-                                select_original=True,selected_name='',selection_name='',replace_original=False):
+    def selectParticles_bylayers(self, layers, tsel=None, selected_name='',selection_name=''):
         '''
         select particles by layer
         '''
         
-        pts, selected_name = self._get_pts(select_original, selected_name)
+        paths, names,pts0 = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
+        selected_name, selection_name = names
+        pts = pts0.copy()
+
         if tsel is None: tsel = 0 # Future: to create a function to evaluate an automatic tsel
         
         pts = pts.sel(time=tsel, method='nearest')
@@ -325,23 +344,23 @@ class MandyocScen:
         
         self._apply_selection(ids, 
                               selected_name=selected_name, 
-                              replace_original=replace_original, 
                               selection_name=selection_name)
         return self
     
     
     def classify_ParticlesRange(self, domain_intervals, tsel=None,
-                               select_original=True,selected_name='',selection_name='',replace_original=False):
+                               selected_name='',selection_name=''):
         
+        """
+        [ongoing]
+        """
         #Classify all particles based on X ranges, given a time step tsel
         #Categories are based on the domain intervals keys
         
-        pts, selected_name = self._get_pts(select_original, selected_name)
-        
-        if replace_original==True:
-            selection_name = 'original'
-        elif selection_name == '':
-            selection_name == 'selected'
+        paths, names,pts0 = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
+        source_path, target_path = paths
+        selected_name, selection_name = names
+        pts = pts0.copy()
         
         if tsel is None: tsel = 0
         
@@ -374,7 +393,8 @@ class MandyocScen:
             ids_in_domain = snapshot.id.values[mask_combined]
             pts[field_name] = xr.where(pts.id.isin(ids_in_domain), dom,  pts[field_name])
         
-        self.DTree.particles[selection_name] = pts
+        target_path = f'/particles/{selection_name}'
+        self.DTree[target_path] = pts
         
         pts[field_name].attrs['reference timestep'] = f'{tsel}myr'
         pts[field_name].attrs['classes range'] = str(domain_intervals)
@@ -382,34 +402,31 @@ class MandyocScen:
         
         return self
 
-    def fieldToParticle(self, variable, 
-                       select_original=True,selected_name='',selection_name='',replace_original=False):
-        
-        pts0, selected_name = self._get_pts(select_original, selected_name)
+    def fieldToParticle(self, variable, selected_name='', selection_name='', method='linear'):
+        """
+        [ongoing]
+        """
+        paths, names,pts0 = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
+        source_path, target_path = paths
+        selected_name, selection_name = names
+        pts = pts0.copy()
 
-        if replace_original==True:
-            selection_name = 'original'
-        elif selection_name == '':
-            selection_name == 'selected'
+        field = self.DTree.mesh.original[variable]
         
-        field = self.vars_DS[variable]
         #if not isinstance(variables, (list, tuple, np.ndarray)): variables = [variable]
         
-        pts = pts0.copy()
-        
-        components = list(field.data_vars)
+        #components = list(field.data_vars)
         
         field_interpolated = field.interp(
             x=pts.x, 
-            z=pts.z, 
-            method='linear'
+            z=pts.z,
+            time=pts.time,
+            method=method
         )
-        
-        for comp in components:
-            pts[comp] = field_interpolated[comp].drop_vars(['x', 'z']).transpose('id', 'time') #did it worked?
-        
-        
-        self.DTree.particles[selection_name] = pts
+    
+        pts[variable] = field_interpolated.drop_vars(['x', 'z']).transpose('id', 'time')
+
+        self.DTree[source_path][variable] = pts
 
         gc.collect()
         return self

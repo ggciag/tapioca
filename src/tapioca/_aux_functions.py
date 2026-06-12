@@ -20,7 +20,6 @@ from ._variables import *
 
 def read_params(path_param):
     '''
-    [Old function]
     This functions loads param.txt in the form of a dictionary. 
     Keys are the parameter names and the values are the parameter values. 
     
