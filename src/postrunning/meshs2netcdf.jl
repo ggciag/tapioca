@@ -37,7 +37,7 @@ global DTYPES =Dict{String,DataType}(
     "z"=>Float32,
     "time"=>Float32,
 
-    "density"=>UInt32,
+    "density"=>Float32,
     "viscosity"=>Float64,
     "pressure"=>Float64,
     "strain"=>Float64,
@@ -64,7 +64,7 @@ struct mesh3D
     Ny::Int
     Nz::Int
     Lx::Float64
-    Ly::Int
+    Ly::Float64
     Lz::Float64
 end
 
@@ -96,7 +96,7 @@ function read_param(fpath::String="param.txt")::Dict{String,String}
     return param_dict
 end
 
-function read_data(var::String, step::Int, nxnz::Tuple; veloc::Bool=false, surface::Bool=false,vartype::DataType=Float64)
+function read_data(var::String, step::Int32, nxnz::Tuple, vartype::Type; veloc::Bool=false, surface::Bool=false)
     
     file = "$(var)/$(var)_$(step).txt"
     skipto::Int = 0
@@ -121,7 +121,7 @@ function read_data(var::String, step::Int, nxnz::Tuple; veloc::Bool=false, surfa
     end
 end
 
-function get_all_steps()::Vector{Int}
+function get_all_steps()::Vector{Int32}
     pattern = joinpath("time", "time_*.txt")
     files = glob(pattern)
     
@@ -129,7 +129,7 @@ function get_all_steps()::Vector{Int}
     return sort(steps)
 end
 
-function read_time(step::Int)::Float64
+function read_time(step::Integer)::Float64
     time::Float64=0.0
     open(joinpath("time", "time_$step.txt")) do file
         line = readline(file)
@@ -146,7 +146,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     Lx = mesh.Lx
     Lz = mesh.Lz
 
-    dtypes = scen.datatypes[variable]
+    dtypes = scen.datatypes
     vtype = dtypes[variable]
     x_coords = dtypes["x"].(range(0.0f0, Lx, length=Nx))
     z_coords = dtypes["z"].(range(0.0f0, Lz, length=Nz))
@@ -166,7 +166,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     local buffer_vx, buffer_vy, buffer_var, buffer_surf, surface_nx, surface_x_coords
     
     if surface
-        sx_sample,_ = read_data("surface", 0, (Nx,Nz), veloc=false, surface=true)
+        sx_sample,_ = read_data("surface", Int32(0), (Nx,Nz),dtypes["surface"], veloc=false, surface=true)
         surface_nx = size(sx_sample)[1]
         surface_x_coords = dtypes["x"].( range(0.0f0, Lx, length=surface_nx) )
 		buffer_surf = zeros(dtypes["surface"], surface_nx, num_steps)
@@ -185,11 +185,11 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     @threads for i in eachindex(steps)
         step = steps[i]
 
-        data = read_data(variable,step,(Nx,Nz),veloc=veloc,surface=surface,vartype=vtype)
+        data = read_data(variable,step,(Nx,Nz),vtype,veloc=veloc,surface=surface)
         if data !== nothing
             
 	    if veloc
-                dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
+                dens = read_data("density",step,(Nx,Nz),dtypes["density"],veloc=false, surface=false)
                 vx,vy = data
                 vx[dens.<AIR_DENSITY_THRESHOLD] .= 0
                 vy[dens.<AIR_DENSITY_THRESHOLD] .= 0
@@ -202,13 +202,13 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
 
                 buffer_surf[:, i] = sy
             else
-                dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
+                dens = read_data("density",step,(Nx,Nz),dtypes["density"],veloc=false, surface=false)
                 data[dens.<AIR_DENSITY_THRESHOLD] .= 0
                 buffer_var[:, :, i] = data'
             end
 	    
             else
-                @warn "No data found for $fpath at step $step"
+                @warn "No data found for $(variable)_$(step).txt at step $step"
             end
         
         #Tracker
@@ -227,10 +227,10 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
         attrib=Dict("units"=>units["time"],"long_name"=>"Time","axis"=>"T"),
                                                                 deflatelevel=dfllevel, shuffle=true)
         
-        defVar(ds,"steps", steps, ("time",),
-        attrib=Dict("units"=>"","long_name"=>"Time steps"),
+        defVar(ds,"steps", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"Time steps"),
                 deflatelevel=dfllevel, shuffle=true)
-                                                         
+        ds["steps"][:] = steps
+
         if veloc
             defDim(ds,"x",Nx)
             defDim(ds,"z",Nz)
@@ -263,9 +263,9 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
         else
             defDim(ds,"x",Nx)
             defDim(ds,"z",Nz)
-            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x-coordinate","axis" => "X"), 
+            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x","axis" => "X"), 
             													deflatelevel=dfllevel,shuffle=true)
-            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>units["z"],"long_name"=>"z-coordinate","axis"=>"Z"),
+            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>units["z"],"long_name"=>"z","axis"=>"Z"),
                                                                 deflatelevel=dfllevel,shuffle=true)
             defVar(ds,variable,vtype,("x","z","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
                                                                 deflatelevel=dfllevel, shuffle=true)
@@ -293,21 +293,21 @@ function build_scenario(params::Dict)
     Nz = parse(Int, params["nz"]) # elements in z
     Lx = parse(DTYPES["x"], params["lx"]) # x length
     Lz = parse(DTYPES["z"], params["lz"]) # z length
-    thick_air::DTYPES["z"] = 40e3 # m
+    thick_air::DTYPES["z"] = 40.0f3 # m
 
     if dims == 3 
         Ny = parse(Int, params["ny"])
         Ly = parse(Int, params["ly"])
         mesh = mesh3D(Nx,Ny,Nz,Lx,Ly,Lz)
     else
-        mesh = mesh2D(Nx,Nz,Lx,Lx)
+        mesh = mesh2D(Nx,Nz,Lx,Lz)
     end
 
     # Finding all steps
     steps = get_all_steps()
     times = DTYPES["time"][read_time(step) for step in steps]
     CSV.write("times.csv", DataFrame(step=steps, time_myr=times))
-    println("$(length(steps)) time steps were found, from $(times[1]) Myr [$(steps[1])] to $(times[end]) Myr [$(steps[end])].")
+    println("$(length(steps)) time steps were found, from $(times[1]) Myr [$(steps[1])] up to $(times[end]) Myr [$(steps[end])].")
 
     return MandyocScenario(dims, steps, times, thick_air, UNITS, DTYPES), mesh
 end
