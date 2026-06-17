@@ -8,7 +8,7 @@ solver = direct # default is direct [direct/iterative]
 denok = 1.0e-15 # default is 1.0E-4
 particles_per_element = 64 # default is 81
 particles_perturb_factor = 0.7 # default is 0.5 [values are between 0 and 1]
-particles_to_export = 1
+particles_to_export = 10
 rtol = 1.0e-7 # the absolute size of the residual norm (relevant only for iterative methods), default is 1.0E-5
 RK4 = Euler # default is Euler [Euler/Runge-Kutta]
 Xi_min = 1.0e-7 # default is 1.0E-14
@@ -31,8 +31,8 @@ a2l = True # default is True [True/False]
 free_surface_stab = True # default is True [True/False]
 theta_FSSA = 0.5 # default is 0.5 (only relevant when free_surface_stab = True)
 # Time constrains
-step_max = 200 # Maximum time-step of the simulation
-time_max = 10.0e6 # Maximum time of the simulation [years]
+step_max = 500 # Maximum time-step of the simulation
+time_max = 20.0e6 # Maximum time of the simulation [years]
 dt_max = 50.0e3 # Maximum time between steps of the simulation [years]
 step_print = 10 # Make file every <step_print>
 sub_division_time_step = 0.5 # default is 1.0

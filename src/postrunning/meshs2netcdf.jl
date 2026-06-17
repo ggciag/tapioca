@@ -6,6 +6,10 @@ using DataFrames
 using Base.Threads
 using StatsBase
 
+global AIR_DENSITY_THRESHOLD = 20
+global LITHOLOGY_DATATYPE = UInt8
+global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
+
 global UNITS =Dict{String,String}(
     "x"=>"m",
     "y"=>"m",
@@ -45,8 +49,7 @@ global DTYPES =Dict{String,DataType}(
     "thermal_diffusivity"=>Float64,
     "Phi"=>Float64,
     "dPhi"=>Float64,  # Need to confirm
-    "X_depletion"=>Float64,
-    "lithology"=>UInt8
+    "X_depletion"=>Float64
 )
 
 struct mesh2D 
@@ -66,6 +69,7 @@ struct mesh3D
 end
 
 struct MandyocScenario
+    dims::Int
     steps::Vector{Int32}
     times::Vector{Float64}
     thick_air::Float32
@@ -142,7 +146,8 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     Lx = mesh.Lx
     Lz = mesh.Lz
 
-    vartype = scen.DTYPES[variable]
+    dtypes = scen.datatypes[variable]
+    vtype = dtypes[variable]
     x_coords = dtypes["x"].(range(0.0f0, Lx, length=Nx))
     z_coords = dtypes["z"].(range(0.0f0, Lz, length=Nz))
 
@@ -151,7 +156,6 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     num_steps = length(steps)
 
     units = scen.units
-    h_air = scen.thick_air
     
     dfllevel::Int8 = 7 # compression level 1-9
 
@@ -171,7 +175,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
         buffer_vx = zeros(dtypes["velocity"], Nx, Nz, num_steps)
         buffer_vy = zeros(dtypes["velocity"], Nx, Nz, num_steps)
     else
-        buffer_var = zeros(dtypes[variable], Nx, Nz, num_steps)
+        buffer_var = zeros(vtype, Nx, Nz, num_steps)
     end
     
     #Multithreading processing
@@ -179,30 +183,27 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     start_time = time()
     
     @threads for i in eachindex(steps)
-            step = steps[i]
+        step = steps[i]
 
-            data = read_data(variable,step,(Nx,Nz),veloc=veloc, surface=surface)
-            if data !== nothing
+        data = read_data(variable,step,(Nx,Nz),veloc=veloc,surface=surface,vartype=vtype)
+        if data !== nothing
             
 	    if veloc
                 dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
                 vx,vy = data
-                vx[dens.<1200] .= 0
-                vy[dens.<1200] .= 0
+                vx[dens.<AIR_DENSITY_THRESHOLD] .= 0
+                vy[dens.<AIR_DENSITY_THRESHOLD] .= 0
 		        buffer_vx[:, :, i] = vx'
                 buffer_vy[:, :, i] = vy'
                 
             elseif surface
 
                 sx,sy = data
-                sy .= sy .+ h_air
-                fix_topo = mean(sy[(sx.>100e3).&(sx.< 250e3)]) #m  -> keep this value on the end?
-                sy .= sy .- fix_topo
 
                 buffer_surf[:, i] = sy
             else
                 dens = read_data("density",step,(Nx,Nz),veloc=false, surface=false)
-                data[dens.<1200] .= 0
+                data[dens.<AIR_DENSITY_THRESHOLD] .= 0
                 buffer_var[:, :, i] = data'
             end
 	    
@@ -222,22 +223,29 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     Dataset(nc_fname,"c") do ds #criar o arquivo nc
 
         defDim(ds,"time",num_steps)
-        defVar(ds,"time",Float64.(times),("time",),
+        defVar(ds,"time", times, ("time",),
         attrib=Dict("units"=>units["time"],"long_name"=>"Time","axis"=>"T"),
                                                                 deflatelevel=dfllevel, shuffle=true)
         
+        defVar(ds,"steps", steps, ("time",),
+        attrib=Dict("units"=>"","long_name"=>"Time steps"),
+                deflatelevel=dfllevel, shuffle=true)
+                                                         
         if veloc
             defDim(ds,"x",Nx)
             defDim(ds,"z",Nz)
-            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>"m","long_name"=>"x-coordinate","axis" => "X"),
+
+            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x","axis" => "X"),
                                                                 deflatelevel=dfllevel, shuffle=true,
                                                                 )
-            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>"m","long_name"=>"z-coordinate","axis"=>"Z"),
+            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>units["z"],"long_name"=>"z","axis"=>"Z"),
                                                                 deflatelevel=dfllevel, shuffle=true)
-            defVar(ds,"vx",Float64,("x","z","time"),attrib=Dict("units"=>units[variable],
+            
+            defVar(ds,"vx",vtype,("x","z","time"),attrib=Dict("units"=>units[variable],
                                                                 "long_name"=>"vx"),
                                                                 deflatelevel=dfllevel, shuffle=true)
-            defVar(ds,"vy",Float64,("x","z","time"),attrib=Dict("units"=>units[variable],
+            
+            defVar(ds,"vy",vtype,("x","z","time"),attrib=Dict("units"=>units[variable],
                                                                 "long_name"=>"vy",),
                                                                deflatelevel=dfllevel, shuffle=true)
             ds["vx"][:, :, :] = buffer_vx
@@ -245,20 +253,21 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
             
         elseif surface
             defDim(ds,"x",surface_nx)
-            defVar(ds,"x",surface_x_coords,("x",),attrib=Dict("units"=>"m","long_name"=>"x-coordinate","axis" => "X"), 
+            defVar(ds,"x",surface_x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x","axis" => "X"), 
             													deflatelevel=dfllevel, shuffle=true)
-            defVar(ds,variable,Float64,("x","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
+
+            defVar(ds,variable,vtype,("x","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
                                                                 deflatelevel=dfllevel, shuffle=true)
             ds[variable][:, :] = buffer_surf
             
         else
             defDim(ds,"x",Nx)
             defDim(ds,"z",Nz)
-            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>"m","long_name"=>"x-coordinate","axis" => "X"), 
+            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x-coordinate","axis" => "X"), 
             													deflatelevel=dfllevel,shuffle=true)
-            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>"m","long_name"=>"z-coordinate","axis"=>"Z"),
+            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>units["z"],"long_name"=>"z-coordinate","axis"=>"Z"),
                                                                 deflatelevel=dfllevel,shuffle=true)
-            defVar(ds,variable,Float64,("x","z","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
+            defVar(ds,variable,vtype,("x","z","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
                                                                 deflatelevel=dfllevel, shuffle=true)
                                                                 
             ds[variable][:, :, :] = buffer_var
@@ -269,20 +278,14 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     end
 end
 
-function convert2NC(scen::MandyocScenario, variable::String)
-    meshtype = typeof(scen.mesh)
+function build_scenario(params::Dict)
 
-end
-
-function build_scenario()
-
-    # Basic parameters
-    params = read_param("param.txt")
     dims = parse(Int, get(params, "dimensions", "2")) # if the model is 2d or 3d
 
     # Change data types in case of non dimensional scenarios 
     if get(params,"iterative","direct") == "iterative" || get(params,"nondimensionalization","False") == "True" || dims == 3
-        for v in keys(dtypes) dtypes[v] = Float64 end
+        for v in keys(DTYPES) DTYPES[v] = Float64 end
+        global AIR_DENSITY_THRESHOLD = 0
         println("You did run a non dimensional model, all datatypes changed to Float64.")
     end
 
@@ -303,47 +306,41 @@ function build_scenario()
     # Finding all steps
     steps = get_all_steps()
     times = DTYPES["time"][read_time(step) for step in steps]
+    CSV.write("times.csv", DataFrame(step=steps, time_myr=times))
+    println("$(length(steps)) time steps were found, from $(times[1]) Myr [$(steps[1])] to $(times[end]) Myr [$(steps[end])].")
 
-    return MandyocScenario(steps, times, thick_air, units, mesh, DTYPES)
+    return MandyocScenario(dims, steps, times, thick_air, UNITS, DTYPES), mesh
 end
 
-
+function main()
+    
 data_dir = ARGS[end] # Scenario directory
 cd(data_dir)
 
-scen = build_scenario()
-
-# Variables to export
-vars = ["density", "viscosity", "pressure", "strain","strain_rate",
-        "temperature","velocity","surface","heat"]
+# Basic parameters
+params = read_param("param.txt")
 
 if get(params, "magmatism", "off") == "on"
-    push!(vars, "Phi")
-    push!(vars, "dPhi")
-    push!(vars, "X_depletion")
+    push!(VARIABLES, "Phi")
+    push!(VARIABLES, "dPhi")
+    push!(VARIABLES, "X_depletion")
     println("magmatism=on")
 end
 
 if get(params, "export_thermal_diffusivity", "False") == "True"
-    push!(vars, "thermal_diffusivity")
+    push!(VARIABLES, "thermal_diffusivity")
 end
 
-CSV.write("times.csv", DataFrame(step=steps, time_myr=times))
-println("$(lenght(num_steps)) time steps were found, from $(times[1]) Myr [$(steps[1])] to $(times[end]) Myr [$(steps[end])].")
+scen, mesh = build_scenario(params)
 
-# 4. Defining coords
-x_coords = Float64.(range(0.0f0, Lx, length=Nx))
-z_coords = Float64.(range(0.0f0, Lz, length=Nz))
-if dims == 3 y_coords = Float64.(range(0.0f0, Ly, length=Ny)) end
-
-vars = unique(vars)
-
-#println(vars)
-print(joao)
-# 5. NetCDF para cada variável
-for var in vars
-    println("Convertendo variável: $var")
-    convert_to_nc(var,pdict)
+for var in unique(VARIABLES)
+    println("Converting: $var")
+    converter(var,scen,mesh)
 end
 
-println("\nConversão concluída!")
+println("All variables were converted to NetCDF4")
+println("Finished")
+
+end
+
+main()

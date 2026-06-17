@@ -18,5 +18,5 @@ dependencies:
   - astropy
   - pymp-pypi
   - numba
-  - netcdf4
+  - h5netcdf
   - dask
