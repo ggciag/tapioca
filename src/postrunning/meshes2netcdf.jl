@@ -470,6 +470,7 @@ if get(params, "export_lithology", "False") == "True"
     ncores::Int = size(glob(joinpath("lithos","litho_0_*.txt")))[1]
     println("$ncores cores were used in this model.")
     convert_litho_to_nc(scen,mesh, ncores)
+    println("Lithology was converted to NetCDF4")
 end
 
 
