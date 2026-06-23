@@ -26,9 +26,6 @@ VARS_TYPES = { # Outputs
               'velocity': np.float64,
               'strain': np.float64,
               'strain_rate':np.float64,
-              'Phi':np.float64,
-              'dPhi':np.float64,
-              'X_depletion': np.float64,
 
               # Post processing
               'deviatoric_stress':np.float64, # considering \\tau in Pa
