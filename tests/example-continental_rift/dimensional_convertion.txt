@@ -1,5 +1,0 @@
-depth 1
-viscosity 1
-gravity 1
-density 1
-diffusivity 1
