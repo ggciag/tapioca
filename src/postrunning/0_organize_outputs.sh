@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ---
-# This script organizes simulation output files (.txt) into subdirectories.
+# This script organizes simulation output files (.txt) into subdirectories. [optimazed by gemini]
 # It creates a directory for each data type and moves the corresponding files into it.
 # ---
 

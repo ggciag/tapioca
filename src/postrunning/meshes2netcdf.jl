@@ -1,3 +1,8 @@
+# Write by Joao Bueno - Jun. 2026
+# This script converts text files from Mandyoc outputs into netcdf4 files.
+# Outputs must be organized in folders (check `0_organize_outputs.sh`)
+
+
 using NCDatasets
 using Glob
 using CSV
