@@ -1,0 +1,27 @@
+site_name: TapIOca
+site_description: Input and Output management and post-processing for [Mandyoc](https://ggciag.github.io/mandyoc/) geodynamic models.
+site_url: https://ggciag.github.io/tapioca/
+theme:
+  name: readthedocs
+
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_root_heading: true
+            show_source: false
+
+
+nav:
+  - Home: index.md
+  - User Guide: 
+    - Post-Processing quick Start: user_guide/quick.md
+
+  - API References:
+    - Post-processing: references/postproc.md
+    - Inputs: references/inputs.md
+    - Plotter: references/plotter.md

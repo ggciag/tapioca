@@ -50,7 +50,8 @@ viz = [
 ]
 
 docs = [
-    "mkdocs-material>=9.0.0",
+    "mkdocs-material>=9",
+    "mkdocstrings[python]"
 ]
 
 [tool.setuptools.packages.find]
