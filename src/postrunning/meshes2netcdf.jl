@@ -6,10 +6,9 @@ using DataFrames
 using Base.Threads
 using StatsBase
 
-
-const DEFAULT_AIR_DENSITY_THRESHOLD = 20.0f0 
-const LITHOLOGY_DATATYPE = UInt8 
-const DEFAULT_VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
+global AIR_DENSITY_THRESHOLD = 20
+global LITHOLOGY_DATATYPE = UInt8
+global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
 
 global UNITS =Dict{String,String}(
     "x"=>"m",
@@ -30,7 +29,6 @@ global UNITS =Dict{String,String}(
     "Phi"=>"dimensionless",
     "dPhi"=>"1/s",  # Need to confirm
     "X_depletion"=>"dimensionless"
-
 )
 
 global DTYPES =Dict{String,DataType}(
@@ -52,8 +50,7 @@ global DTYPES =Dict{String,DataType}(
     "Phi"=>Float64,
     "dPhi"=>Float64,  # Need to confirm
     "X_depletion"=>Float64
-
-) 
+)
 
 struct mesh2D 
     Nx::Int
@@ -77,9 +74,7 @@ struct MandyocScenario
     times::Vector{Float64}
     thick_air::Float32
     units::Dict{String,String}
-    datatypes::Dict{String,DataType} # Instance-specific datatypes
-    air_density_threshold::Float32
-    data_dir::String # Store the scenario directory
+    datatypes::Dict{String,DataType}
 end
 
 function read_param(fpath::String="param.txt")::Dict{String,String}
@@ -101,20 +96,16 @@ function read_param(fpath::String="param.txt")::Dict{String,String}
     return param_dict
 end
 
-function read_data(var::String, scen::MandyocScenario, step::Integer, mesh::mesh2D, vartype::Type; veloc::Bool=false, surface::Bool=false)
+function read_data(var::String, step::Integer, mesh::mesh2D, vartype::Type; veloc::Bool=false, surface::Bool=false)
     
-    file_path = joinpath(scen.data_dir, var, "$(var)_$(step).txt")
+    file = "$(var)/$(var)_$(step).txt"
     Nx,Nz = mesh.Nx, mesh.Nz
+    
     skipto::Int = 0
     if surface skipto=0 else skipto=3 end
+    C = CSV.File(file, header=false, comment="P", skipto=skipto,types=vartype)|>CSV.Tables.matrix
     
-    try
-        C = CSV.File(file_path, header=false, comment="P", skipto=skipto,types=vartype)|>CSV.Tables.matrix
-    catch e
-        @warn "Could not read file: $file_path. Error: $e"
-        return nothing
-    end
-
+    
     if veloc 
         C[C .< 1e-200] .= 0
         vx = transpose(reshape(C[1:2:end], (Nx, Nz)))
@@ -132,9 +123,8 @@ function read_data(var::String, scen::MandyocScenario, step::Integer, mesh::mesh
     end
 end
 
-
-function get_all_steps(data_dir::String)::Vector{Int32}
-    pattern = joinpath(data_dir, "time", "time_*.txt")
+function get_all_steps()::Vector{Int32}
+    pattern = joinpath("time", "time_*.txt")
     files = glob(pattern)
     
     steps = Int32[parse(Int32, split(splitext(basename(f))[1], '_')[end]) for f in files]
@@ -142,7 +132,6 @@ function get_all_steps(data_dir::String)::Vector{Int32}
 end
 
 function read_time(step::Integer)::Float64
-
     time::Float64=0.0
     open(joinpath("time", "time_$step.txt")) do file
         line = readline(file)
@@ -154,8 +143,8 @@ end
 
 function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     nc_fname = "$variable.nc"
-
-    Nx, Nz = mesh.Nx, mesh.Nz
+    Nx = mesh.Nx
+    Nz = mesh.Nz
     Lx = mesh.Lx
     Lz = mesh.Lz
 
@@ -178,10 +167,8 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     
     local buffer_vx, buffer_vy, buffer_var, buffer_surf, surface_nx, surface_x_coords
     
-    
     if surface
-        
-        sx_sample,_ = read_data("surface",scen, 0, mesh, dtypes["surface"], veloc=false, surface=true)
+        sx_sample,_ = read_data("surface", 0, mesh ,dtypes["surface"], veloc=false, surface=true)
         surface_nx = size(sx_sample)[1]
         surface_x_coords = dtypes["x"].( range(0.0f0, Lx, length=surface_nx) )
 		buffer_surf = zeros(dtypes["surface"], surface_nx, num_steps)
@@ -193,8 +180,6 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
         buffer_var = zeros(vtype, Nx, Nz, num_steps)
     end
     
-
-    
     #Multithreading processing
     progress_counter = Threads.Atomic{Int}(0)
     start_time = time()
@@ -202,29 +187,25 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     @threads for i in eachindex(steps)
         step = steps[i]
 
-        data = read_data( variable, scen, step, mesh, vtype, veloc=veloc, surface=surface)
+        data = read_data(variable,step,mesh,vtype,veloc=veloc,surface=surface)
         if data !== nothing
             
 	    if veloc
-                dens = read_data("density",scen, step,mesh,dtypes["density"],veloc=false, surface=false)
-
+                dens = read_data("density",step,mesh,dtypes["density"],veloc=false, surface=false)
                 vx,vy = data
-
-                vx[dens_for_filter.<scen.air_density_threshold] .= 0
-                vy[dens_for_filter.<scen.air_density_threshold] .= 0
-                
+                vx[dens.<AIR_DENSITY_THRESHOLD] .= 0
+                vy[dens.<AIR_DENSITY_THRESHOLD] .= 0
 		        buffer_vx[:, :, i] = vx'
                 buffer_vy[:, :, i] = vy'
                 
             elseif surface
 
-                _,sy = data
+                sx,sy = data
 
                 buffer_surf[:, i] = sy
             else
-                dens = read_data("density",scen,step,mesh,dtypes["density"],veloc=false, surface=false)
-                data[dens_for_filter.<scen.air_density_threshold] .= 0
-
+                dens = read_data("density",step,mesh,dtypes["density"],veloc=false, surface=false)
+                data[dens.<AIR_DENSITY_THRESHOLD] .= 0
                 buffer_var[:, :, i] = data'
             end
 	    
