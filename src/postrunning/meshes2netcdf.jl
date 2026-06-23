@@ -226,10 +226,10 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
 
         defDim(ds,"time",num_steps)
         defVar(ds,"time", times, ("time",),
-        attrib=Dict("units"=>units["time"],"long_name"=>"Time","axis"=>"T"),
+        attrib=Dict("units"=>units["time"],"long_name"=>"time","axis"=>"T"),
                                                                 deflatelevel=dfllevel, shuffle=true)
         
-        defVar(ds,"steps", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"Time steps"),
+        defVar(ds,"steps", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"steps"),
                 deflatelevel=dfllevel, shuffle=true)
         ds["steps"][:] = steps
 
@@ -276,6 +276,129 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
         end
 	
         
+        println("\nSaved to $nc_fname")
+    end
+end
+
+# ======= Functions to convert Lithology =======
+
+function read_litho_file(fpath::String)
+    # Read lithology file and return x, z, lith
+    conf = CSV.File(fpath, 
+                    header=false, 
+                    comment="P", 
+                    delim=' ', 
+                    types=[Int32, Int32, Int8], # x, z, lith_id
+                    silencewarnings=true)
+                    
+    return Vector(conf.Column1), Vector(conf.Column2), Vector(conf.Column3)
+end
+
+function replace_negatives_with_neighbors!(mat::Matrix)
+    result = mat
+    rows::Int16, cols::Int16 = size(mat)
+    negative_indices = findall(result .< 0)
+
+    for idx in negative_indices
+        i::Int16, j::Int16 = idx[1], idx[2]
+        found = false
+        for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            ni, nj = i + di, j + dj
+            if (1 <= ni <= rows && 1 <= nj <= cols) && mat[ni, nj] >= 0
+                result[i, j] = mat[ni, nj]
+                found = true
+                break
+            end
+        end
+    end
+    return result
+end
+
+function convert_litho_to_nc(scen::MandyocScenario,mesh::mesh2D,cores::Integer)
+    
+    nc_fname = "lithology.nc"
+    Nx, Nz = mesh.Nx, mesh.Nz
+    Lx, Lz = mesh.Lx, mesh.Lz
+    dtypes = scen.datatypes
+    steps = scen.steps
+    times = scen.times
+    ncores = cores
+
+    num_steps = length(steps)
+    dfllevel::Int8 = 6 #compression level 1-9
+    
+    # Upscaled mesh for lithology
+    Nxl = (Nx-1)*5 + 1
+    Nzl = (Nz-1)*5 + 1
+    
+    full_buffer = zeros(Integer, Nxl, Nzl, num_steps)
+    
+
+	progress_counter = Threads.Atomic{Int}(0)
+	total_steps = length(steps)
+	start_time = time() # Start global timer
+	
+	@threads for i in eachindex(steps)
+	    step = steps[i]
+
+		litho_mesh = fill(Integer(-1), Nzl, Nxl)
+		
+	    for core in 0:(ncores-1)
+		fpath=joinpath("lithos","litho_$(step)_$core.txt")
+			if isfile(fpath)
+				x_core, z_core, litho_core = read_litho_file(fpath)
+				for k in eachindex(x_core)
+				    litho_mesh[z_core[k] + 1, x_core[k] + 1] = litho_core[k]
+				end
+			end
+	    end
+
+	    # Fill empty cells
+	    replace_negatives_with_neighbors!(litho_mesh)
+	    #litho_mesh .= get.(Ref(litho_dict), litho_mesh, litho_mesh) # Deprecated = map weak seed values
+
+	    # Store finished slice into our 3D buffer
+	    full_buffer[:, :, i] = reverse(litho_mesh, dims=1)'
+	    Threads.atomic_add!(progress_counter, 1)
+	    if progress_counter[] % 10 == 0
+        @info "Progress: $(progress_counter[]) / $total_steps ($(round(progress_counter[]/total_steps*100, digits=1))%)"
+    	end
+	end
+
+    total_elapsed = time() - start_time
+    @info "Finished! Total time: $(round(total_elapsed / 60, digits=2)) minutes."
+    
+    x_coords_litho = dtypes["x"].(range(0.0f0, Lx, length=Nxl))
+    z_coords_litho = dtypes["z"].(range(0.0f0, Lz, length=Nzl))
+    
+    # Creating netcdf file
+    Dataset(nc_fname, "c") do ds
+        
+        defDim(ds, "time", num_steps)
+        defDim(ds, "x", Nxl)
+        defDim(ds, "z", Nzl)
+
+        defVar(ds,"steps", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"steps"),
+                    deflatelevel=dfllevel, shuffle=true)
+        ds["steps"][:] = steps
+
+        defVar(ds, "time", dtypes["time"].(times), ("time",), 
+            attrib=Dict("units"=>"Myr", "long_name"=>"time","axis"=>"T"),
+            deflatelevel=dfllevel, shuffle=true)
+        defVar(ds, "x", x_coords_litho, ("x",), 
+            attrib=Dict("units"=>"m", "long_name"=>"x", "axis"=>"X"),
+            deflatelevel=dfllevel, shuffle=true)
+        defVar(ds, "z", z_coords_litho, ("z",), 
+            attrib=Dict("units"=>"m", "long_name"=>"z", "axis"=>"Z"),
+            deflatelevel=dfllevel, shuffle=true)
+        
+        defVar(ds, "lithology", LITHOLOGY_DATATYPE, ("x", "z", "time"),
+            attrib=Dict(
+                "long_name"=>"Lithology",
+            ),
+            deflatelevel=dfllevel, shuffle=true)
+
+        ds["lithology"][:, :, :] = LITHOLOGY_DATATYPE.(full_buffer)
         println("\nSaved to $nc_fname")
     end
 end
@@ -341,6 +464,15 @@ for var in unique(VARIABLES)
 end
 
 println("All variables were converted to NetCDF4")
+
+if get(params, "export_lithology", "False") == "True"
+    println("Exporting lithology")
+    ncores::Int = size(glob(joinpath("lithos","litho_0_*.txt")))[1]
+    println("$ncores cores were used in this model.")
+    convert_litho_to_nc(scen,mesh, ncores)
+end
+
+
 println("Finished")
 
 end
