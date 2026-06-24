@@ -19,8 +19,14 @@ plugins:
 
 nav:
   - Home: index.md
-  - User Guide: 
-    - Post-Processing quick Start: user_guide/quick.md
+  - User Guide:     
+    - How to install: user_guide/install.md
+    - Quick Start:
+      - Post-Processing: user_guide/quick_postproc.md
+
+  - Data Abstractions:
+    - Overview: abstractions/abs_overview.md
+    - Mandyoc Scenario: abstractions/mandyocScen.md
 
   - API References:
     - Post-processing: references/postproc.md

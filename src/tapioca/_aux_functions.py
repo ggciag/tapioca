@@ -108,30 +108,45 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
 
 #====== OLD/DEPRECATED FUNCTIONS ======
 
-def get_rank(cdir:str) -> int:
-    '''
-    [Old function]
-    This function returns the number of processes (ranks) used to run a scenario based on the steps directory.
+def _old_get_rank(cdir:str) -> int:
+    '''Get the number of processes (ranks) used to run a
+    scenario based on the steps directory.
 
-    args:
-        cdir: path to the scenario directory.
+    Notes
+    -----
+    This is an old function, kept to test somethings.
 
-    return:
-        int: number of ranks used to run the scenario.
+    Parameters
+    ----------
+    cdir : str
+        Path to the scenario directory.
+
+    Returns
+    -------
+    int
+        Number of ranks used to run the scenario.
+
     '''
 
     return int(len(list(Path(f'{cdir}/steps').glob("step_0_*"))))
 
-def get_lasttime(cdir:str) -> int:
+def _old_get_lasttime(cdir:str) -> int:
     '''
-    [Old function]
-    This function returns the last time step of a scenario based on the time directory.
-    
-    args:
-        cdir: path to the scenario directory.
+    Get the last time step of a scenario based on the time directory.
 
-    return:
-        int: last time step of the scenario.
+    Notes
+    -----
+    This is an old function, kept for compatibility.
+
+    Parameters
+    ----------
+    cdir : str
+        Path to the scenario directory.
+
+    Returns
+    -------
+    int
+        Last time step of the scenario.
     '''
     files = glob.glob(os.path.join(cdir,'time/time*'))
     times = []
