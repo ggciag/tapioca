@@ -12,6 +12,7 @@ Future implementations of tapIOca are planned to include:
 * Expansion and improvement of the documentation;
     * A basic usage guide
     * Make Abstractions section clear
+    * Improving/changing the documentation theme (API Refence is confuse) 
 * Frameworks to facilitate scenarios creation;
     * Read a scenario as input
     * Create classes to facilitate scenario creation

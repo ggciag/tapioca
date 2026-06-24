@@ -2,7 +2,9 @@ site_name: TapIOca
 site_description: Input and Output management and post-processing for [Mandyoc](https://ggciag.github.io/mandyoc/) geodynamic models.
 site_url: https://ggciag.github.io/tapioca/
 theme:
-  name: readthedocs
+  name: "material"
+  features:
+    - content.code.copy
 
 
 plugins:
@@ -15,6 +17,9 @@ plugins:
             docstring_style: numpy
             show_root_heading: true
             show_source: false
+
+            show_signature_annotations: false
+#            docstring_section_style: table
 
 
 nav:
