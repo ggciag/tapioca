@@ -14,7 +14,103 @@ from ._aux_functions import read_params
 
 #Mandyoc Scenario class
 class MandyocScen:
+    """
+    Core data manager for Mandyoc simulations (results).
+
+    This class parses output directories, reads model parameters, and constructs 
+    a unified DataTree. The classes alsos contains the scenarios params.txt 
+    [future implementations will read temporal conditions]. 
     
+    It aligns meshes (common variables), upscaled lithology, surface topography,
+    and Lagrangian particles into a single navigable object. 
+
+    Functions to manipulate data of `MandyocScen` are built-in and in acessors.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The directory containing the Mandyoc output files in .nc and `param.txt`.
+    variables : str or list of str, optional
+        A list of standard variables to load (e.g., 'density', 'temperature'). 
+        Cannot be empty. 
+        Default is `['density']`.
+    name : str, optional
+        A custom name for the scenario. If None, the name of the base directory 
+        is used. 
+        Default is None.
+    load_lithology : bool, optional
+        If True, loads the upscaled lithology mesh into the `'/mesh/upscaled'` node. 
+        Default is False.
+    load_surface : bool, optional
+        If True, loads 1D surface topography data into the `'/surface/topography'` 
+        node. 
+        Default is False.
+    load_particles : bool, optional
+        If True, loads Lagrangian particle tracking data into the `'/particles'` 
+        node. 
+        Default is False.
+    particles_file : str, optional
+        The filename of the NetCDF file containing particle trajectories. Only
+        relevant if `load_particles` is True.
+        Default is `'particles_trajectories.nc'`.
+    xlimits : list of float, optional
+        Spatial bounds [xmin, xmax] for data reading. If None, uses the 
+        domain boundaries. Useful for huge scenarios.
+        Default is None.
+    zlimits : list of float, optional
+        Spatial bounds [zmin, zmax] for data reading. If None, uses the 
+        domain boundaries. Useful for huge scenarios.
+        Default is None.
+    tlimits : list of float, optional
+        Temporal bounds [tmin, tmax] for data reading. If None, uses the 
+        available time steps. Useful for long scenarios.
+        Default is None.
+    thick_air : float, optional
+        The thickness of the sticky air layer (in meters). Default is 40e3.
+
+    chunks_vars : dict, optional
+        A dictionary defining the Dask chunking strategy for the spatial variables. 
+        Default is `{"x": 'auto', "z": 'auto', 'time': "auto"}`.
+    filter_air : bool, optional
+        If True, filters out particles residing within the sticky air layer upon 
+        loading. Only relevant if `load_particles` is True. 
+        Default is True.
+    air_layer : int or float, optional
+        The numerical value or threshold identifying the air layer phase to be 
+        filtered. Required if `filter_air` is True.
+        Default is None.
+    verbose : bool, optional
+        If True, prints status messages to the console during loading and processing
+        tasks. 
+        Default is False.
+
+    Attributes
+    ----------
+    path : pathlib.Path
+        The absolute path to the scenario directory.
+    name : str
+        The designated name of the scenario.
+    params : dict
+        A dictionary of the parameters parsed from `param.txt`.
+    DTree : datatree.DataTree
+        The hierarchical data structure containing all loaded model outputs.
+    xlimits : list of float
+        The horizontal spatial limits applied to the data.
+    zlimits : list of float
+        The vertical spatial limits applied to the data.
+    tlimits : list of float
+        The temporal limits applied to the data.
+    thick_air : float
+        The sticky air thickness.
+    z_corrected : bool
+        Flag indicating whether the Z-coordinates have been corrected for topography.
+    particles_loaded : bool
+        Flag indicating whether the Lagrangian particles have been successfully loaded.
+    
+    ---
+    Check user guides for examples and tutorials
+    """
+
     def __init__(self, path, variables=['density'], name=None,
                  load_lithology=False, load_surface=False, load_particles=False,
                  particles_file='particles_trajectories.nc',
@@ -105,6 +201,35 @@ class MandyocScen:
         return None
     
     def get_scenarioData(self, var='density'):
+        """
+        Extracts spatial and temporal metadata from a reference NetCDF file. 
+        (Nx, Nz) are the grid dimension (elements) and 
+        (XMAX, XMIN, ZMAX, ZMIN, TMAX, TMIN) are the dimensions boundaries.
+
+        The extracted values are stored directly as class attributes.
+
+        Parameters
+        ----------
+        var : str, optional
+            The name of the variable to read (without the '.nc' extension). 
+            Default is 'density'.
+
+        Returns
+        -------
+        bool
+            Returns True if the metadata was successfully extracted.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the corresponding NetCDF file is not found in the scenario path.
+
+        Notes
+        -----
+        This method is called automatically during class initialization to map 
+        the scenario boundaries before building the full DataTree.
+        """
+
         file_path = self.path / f"{var}.nc"
             
         if not file_path.exists():
@@ -126,6 +251,38 @@ class MandyocScen:
         return True
     
     def correctZcoord(self, factor=None):
+        """
+        Adjusts the Z-coordinates across the entire DataTree by a 
+        uniform vertical shift to the Eulerian meshes, surface topography
+        arrays, and particles based on the thickness of the sticky 
+        air layer (or apply a custom baseline). 
+
+        Useful to analyse scenario considering the baseline as 0 m.
+
+        Parameters
+        ----------
+        factor : float, optional
+            The value to subtract from the Z-coordinates (in meters). 
+            If None, it is calculated automatically as
+            `(self.ZMAX - self.thick_air)`. 
+            Default is None.
+
+        Returns
+        -------
+        bool
+            Returns True if the correction was successfully applied. Returns 
+            False if the coordinates were already corrected.
+
+        Notes
+        -----
+        **Tree Mutation:** This method modifies the underlying datasets in-place. 
+        It updates the `z` coordinates for nodes under `'/mesh'` and `'/particles'`, 
+        and the `'surface'` data array for nodes under `'/surface'`. 
+        
+        **Attribute Mutation:** Updates `self.zlimits`, `self.ZMAX`, and 
+        `self.ZMIN`, and sets `self.z_corrected` to True.
+        """
+        
         if self.z_corrected:
             if self.verbose: print("Z was already corrected")
             return False
@@ -166,7 +323,19 @@ class MandyocScen:
 
     def _load_spatial_var(self, variable, chunks={}):
         """
-        Internal function to load Eulerian grids and slice them to xlimits,zlimits
+        Internal method to load Eulerian grids and slice them to `xlimits`,`zlimits`.
+
+        Parameters
+        ----------
+        variable : str
+            The name of the variable to load.
+        chunks: dict, optional
+            Dictionary with the chunksizes (keys) for each dimensions (keys).
+
+        Returns
+        -------
+        xr.Dataset
+            The loaded data for the variable
         """
         
         file_path = self.path / f"{variable}.nc"
@@ -193,8 +362,44 @@ class MandyocScen:
     
     def _load_particles(self, name, chunks={'id': 'auto'}, filter_air=True, air_layer=None):
         """
-        Internal function to load particles dataset 
-        """        
+        Loads Lagrangian particle trajectories from a NetCDF file into the DataTree.
+
+        This internal method reads the particle file, applies lazy Dask 
+        chunking, and truncates the dataset to match the active temporal limits 
+        (`self.tlimits`). 
+        It can also optionally filter out particles belonging to the sticky air
+        phase before storing them in the tree.
+
+        Parameters
+        ----------
+        name : str
+            The filename of the particles NetCDF file to load.
+        chunks : dict, optional
+            A dictionary defining the Dask chunking strategy for the particle 
+            dataset. 
+            Default is `{'id': 'auto'}`.
+        filter_air : bool, optional
+            If True, evaluates the 'layer' variable to mask out particles of sticky air.
+            Default is True.
+        air_layer : int, optional
+            The ID of the sticky air layer. If None and `filter_air` is True, the 
+            algorithm assumes the maximum value in the 'layer' array corresponds
+            to the air phase. 
+            Default is None.
+
+        Returns
+        -------
+        bool
+            Returns True if the particles were successfully loaded, filtered, 
+            and stored. Returns False if the specified file does not exist.
+
+        Notes
+        -----
+        **Tree Mutation:** This method creates or overwrites the `'/particles/original'` 
+        node in the `self.DTree` with the processed `xarray.Dataset`.
+        
+        **Attribute Mutation:** Sets the class attribute `self.particles_loaded` to True.
+        """
         file_path = self.path / name
         
         if not file_path.exists():
@@ -206,7 +411,7 @@ class MandyocScen:
         
         if filter_air and 'layer' in particles.data_vars:
             if isinstance(air_layer, int): air = air_layer
-            else: air = int(particles.layer.max())
+            else: air = int(particles.layer.max()) #future: find air layer by density?
                 
             cond = particles.layer != air
             particles = particles.where(cond)
