@@ -9,22 +9,25 @@ from pathlib import Path
 
 from ._variables import *
 
-
-
-
-
-
+__all__ = ["read_params","read_data"]
 
 # Old functions, mostly made to handle the old format of data management
 # Could be useful for people using older versions of Mandyoc
 
-def read_params(path_param):
+def read_params(path_param:str)->dict:
     '''
-    This functions loads param.txt in the form of a dictionary. 
-    Keys are the parameter names and the values are the parameter values. 
+    Loads the param.txt in the form of a dictionary. 
+    Keys are the parameter names and the values are the parameter values.
     
-    args:
-        path_param: path to the param.txt file of a scenario.
+    Parameters
+    ----------
+    path_param : str or Path
+        Path to the param.txt file.
+    
+    Returns
+    -------
+    dict
+        Dictionary containing the parameter (key) and its value (value).
     '''
 
     params_form = {}
@@ -45,57 +48,43 @@ def read_params(path_param):
 
     return params_form
 
-def get_rank(cdir):
+def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False) -> np.array:
     '''
-    [Old function]
-    This function returns the number of processes (ranks) used to run a scenario based on the steps directory.
-
-    args:
-        cdir: path to the scenario directory.
-
-    return:
-        int: number of ranks used to run the scenario.
-    '''
-
-    return int(len(list(Path(f'{cdir}/steps').glob("step_0_*"))))
-
-def get_lasttime(cdir):
-    '''
-    [Old function]
-    This function returns the last time step of a scenario based on the time directory.
-    
-    args:
-        cdir: path to the scenario directory.
-
-    return:
-        int: last time step of the scenario.
-    '''
-    files = glob.glob(os.path.join(cdir,'time/time*'))
-    times = []
-    for f in files:
-        times.append(int(f[:-4].split('_')[-1]))
-    
-    return np.max(times)
-
-def read_data(file, Nx, Nz, veloc=False, surface=False):
-    '''
-    [Old function]
-    This function reads the data from .txt files for a variable and returns it as a numpy array. 
+    Reads the data from a .txt file for a variable and returns it as a numpy array. 
     The function can also return the velocity components or surface data separately.
 
-    args:
-        file: .txt file to read.
-        veloc: boolean, if True, returns the velocity components separately.
-        surface: boolean, if True, returns the surface data.
+    Parameters
+    ----------
+    file : str or Path
+        File to read (.txt)
+    
+    Nx : int
+        Number of elements in the x direction
+        
+    Nz : int
+        Number of elements in the z direction
 
-        Nx: number of grid points in the x direction. [can be get from the params]
-        Nz: number of grid points in the z direction. [can be get from the params]
+    veloc : bool, optional
+        If True, returns the velocity components separately.
+        Default is False.
+    
+    surface : bool, optional
+        If True, returns the surface data.
+        Default is False.
 
-    return:
-        numpy array: variable loaded.
+    Returns
+    -------
+    np.array
+        Variable loaded.
+
+    Notes
+    ----
+    - If veloc is True, returns the velocity components separately.
+    - If surface is True, returns the surface data.
+    Otherwise, returns the data as a numpy array.
     '''
 
-    file = f'{"_".join(file.split("_")[:-1])}/{file}.txt'
+    #file = f'{"_".join(file.split("_")[:-1])}/{file}.txt'
     data = pd.read_csv(file, header=None, 
                        skiprows=2, comment='P')
     
@@ -114,3 +103,38 @@ def read_data(file, Nx, Nz, veloc=False, surface=False):
         vy = np.reshape(data[1::2], (Nx,Nz), order='F')
         data = (vx.T, vy.T)
     return data
+
+
+#====== OLD/DEPRECATED FUNCTIONS ======
+
+def get_rank(cdir:str) -> int:
+    '''
+    [Old function]
+    This function returns the number of processes (ranks) used to run a scenario based on the steps directory.
+
+    args:
+        cdir: path to the scenario directory.
+
+    return:
+        int: number of ranks used to run the scenario.
+    '''
+
+    return int(len(list(Path(f'{cdir}/steps').glob("step_0_*"))))
+
+def get_lasttime(cdir:str) -> int:
+    '''
+    [Old function]
+    This function returns the last time step of a scenario based on the time directory.
+    
+    args:
+        cdir: path to the scenario directory.
+
+    return:
+        int: last time step of the scenario.
+    '''
+    files = glob.glob(os.path.join(cdir,'time/time*'))
+    times = []
+    for f in files:
+        times.append(int(f[:-4].split('_')[-1]))
+    
+    return np.max(times)

@@ -1,5 +1,7 @@
 import numpy as np
 
+__all__ = ["VARIABLES_LIST","VARS_TYPES","SEC_PER_YEAR","CM"]
+
 VARIABLES_LIST = ["density",
 "heat",
 "strain",
@@ -14,6 +16,7 @@ VARIABLES_LIST = ["density",
 "Phi",
 "dPhi",
 "X_depletion"]
+"""list of str: The standard list of expected Mandyoc output variables."""
 
 VARS_TYPES = { # Outputs
               'density': np.float64,
@@ -39,9 +42,10 @@ VARS_TYPES = { # Outputs
 
 
 SEC_PER_YEAR = 60*60*24*365.25 # seconds per year
+"""float: Conversion factor of seconds in a year."""
 
 CM = 1/2.54 # cm per inch -> convert plotting to centimeters by *cm 
-
+"""float: Conversion factor of inches to centimeters. Useful to change matplotlib measures."""
 
 # Useful data types descriptions:
 
