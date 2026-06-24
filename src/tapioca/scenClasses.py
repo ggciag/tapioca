@@ -28,60 +28,74 @@ class MandyocScen:
 
     Parameters
     ----------
-    path : str or pathlib.Path
+    path : str
         The directory containing the Mandyoc output files in .nc and `param.txt`.
+    
     variables : str or list of str, optional
         A list of standard variables to load (e.g., 'density', 'temperature'). 
-        Cannot be empty. 
+        **Cannot be empty**. 
+        
         Default is `['density']`.
     name : str, optional
         A custom name for the scenario. If None, the name of the base directory 
         is used. 
+        
         Default is None.
     load_lithology : bool, optional
         If True, loads the upscaled lithology mesh into the `'/mesh/upscaled'` node. 
+        
         Default is False.
     load_surface : bool, optional
         If True, loads 1D surface topography data into the `'/surface/topography'` 
         node. 
+        
         Default is False.
     load_particles : bool, optional
         If True, loads Lagrangian particle tracking data into the `'/particles'` 
         node. 
+        
         Default is False.
     particles_file : str, optional
         The filename of the NetCDF file containing particle trajectories. Only
         relevant if `load_particles` is True.
+        
         Default is `'particles_trajectories.nc'`.
     xlimits : list of float, optional
         Spatial bounds [xmin, xmax] for data reading. If None, uses the 
         domain boundaries. Useful for huge scenarios.
+        
         Default is None.
     zlimits : list of float, optional
         Spatial bounds [zmin, zmax] for data reading. If None, uses the 
         domain boundaries. Useful for huge scenarios.
+        
         Default is None.
     tlimits : list of float, optional
         Temporal bounds [tmin, tmax] for data reading. If None, uses the 
         available time steps. Useful for long scenarios.
+        
         Default is None.
     thick_air : float, optional
         The thickness of the sticky air layer (in meters). Default is 40e3.
 
     chunks_vars : dict, optional
         A dictionary defining the Dask chunking strategy for the spatial variables. 
+        
         Default is `{"x": 'auto', "z": 'auto', 'time': "auto"}`.
     filter_air : bool, optional
         If True, filters out particles residing within the sticky air layer upon 
         loading. Only relevant if `load_particles` is True. 
+        
         Default is True.
-    air_layer : int or float, optional
+    air_layer : int, optional
         The numerical value or threshold identifying the air layer phase to be 
         filtered. Required if `filter_air` is True.
+        
         Default is None.
     verbose : bool, optional
         If True, prints status messages to the console during loading and processing
         tasks. 
+        
         Default is False.
 
     Attributes
@@ -107,18 +121,20 @@ class MandyocScen:
     particles_loaded : bool
         Flag indicating whether the Lagrangian particles have been successfully loaded.
     
-    ---
-    Check user guides for examples and tutorials
+    Notes
+    -----
+    Check user guides for examples and tutorials. A comprehensive explanaition will be 
+    available at Data Abstractions section.
     """
 
-    def __init__(self, path, variables=['density'], name=None,
-                 load_lithology=False, load_surface=False, load_particles=False,
-                 particles_file='particles_trajectories.nc',
-                 xlimits=None, zlimits=None, tlimits=None, # ylimits should be implemented for the 3D version
-                 thick_air=40e3,
-                 chunks_vars={"x": 'auto', "z": 'auto', 'time': "auto"},
-                 filter_air=True, air_layer=None, #only relevant if load particles
-                 verbose=False):
+    def __init__(self, path:str, variables:list=['density'], name:str=None,
+                 load_lithology:bool=False, load_surface:bool=False, load_particles:bool=False,
+                 particles_file:str='particles_trajectories.nc',
+                 xlimits:list=None, zlimits:list=None, tlimits:list=None, # ylimits should be implemented for the 3D version
+                 thick_air:float=40e3,
+                 chunks_vars:dict={"x": 'auto', "z": 'auto', 'time': "auto"},
+                 filter_air:bool=True, air_layer:int=None, #only relevant if load particles
+                 verbose:bool=False):
 
         # Setting directories and scen name
         self.path = Path(path)
@@ -200,7 +216,7 @@ class MandyocScen:
         
         return None
     
-    def get_scenarioData(self, var='density'):
+    def get_scenarioData(self, var:str='density'):
         """
         Extracts spatial and temporal metadata from a reference NetCDF file. 
         (Nx, Nz) are the grid dimension (elements) and 
@@ -212,6 +228,7 @@ class MandyocScen:
         ----------
         var : str, optional
             The name of the variable to read (without the '.nc' extension). 
+            
             Default is 'density'.
 
         Returns
@@ -265,6 +282,7 @@ class MandyocScen:
             The value to subtract from the Z-coordinates (in meters). 
             If None, it is calculated automatically as
             `(self.ZMAX - self.thick_air)`. 
+            
             Default is None.
 
         Returns
@@ -377,14 +395,17 @@ class MandyocScen:
         chunks : dict, optional
             A dictionary defining the Dask chunking strategy for the particle 
             dataset. 
+            
             Default is `{'id': 'auto'}`.
         filter_air : bool, optional
             If True, evaluates the 'layer' variable to mask out particles of sticky air.
+            
             Default is True.
         air_layer : int, optional
             The ID of the sticky air layer. If None and `filter_air` is True, the 
             algorithm assumes the maximum value in the 'layer' array corresponds
             to the air phase. 
+            
             Default is None.
 
         Returns

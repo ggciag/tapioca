@@ -78,7 +78,7 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
         Variable loaded.
 
     Notes
-    ----
+    -----
     - If veloc is True, returns the velocity components separately.
     - If surface is True, returns the surface data.
     
