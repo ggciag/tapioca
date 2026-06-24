@@ -2,7 +2,7 @@ import numpy as np
 
 __all__ = ["VARIABLES_LIST","VARS_TYPES","SEC_PER_YEAR","CM"]
 
-VARIABLES_LIST = ["density",
+VARIABLES_LIST:list = ["density",
 "heat",
 "strain",
 "lithology",
@@ -18,7 +18,7 @@ VARIABLES_LIST = ["density",
 "X_depletion"]
 """list of str: The standard list of expected Mandyoc output variables."""
 
-VARS_TYPES = { # Outputs
+VARS_TYPES:dict = { # Outputs
               'density': np.float64,
               'pressure': np.float64,
               'heat': np.float64,
@@ -39,12 +39,12 @@ VARS_TYPES = { # Outputs
               'z': np.float64,
               'id': np.int64 # for particles
 }
+"""dict: Dictionary with datatypes (value) for each variable (key)."""
 
-
-SEC_PER_YEAR = 60*60*24*365.25 # seconds per year
+SEC_PER_YEAR:int = 60*60*24*365.25 # seconds per year
 """float: Conversion factor of seconds in a year."""
 
-CM = 1/2.54 # cm per inch -> convert plotting to centimeters by *cm 
+CM:float = 1/2.54 # cm per inch -> convert plotting to centimeters by *cm 
 """float: Conversion factor of inches to centimeters. Useful to change matplotlib measures."""
 
 # Useful data types descriptions:

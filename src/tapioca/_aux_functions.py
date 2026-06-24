@@ -7,7 +7,7 @@ import pandas as pd
 
 from pathlib import Path
 
-from ._variables import *
+from ._variables import SEC_PER_YEAR, VARIABLES_LIST
 
 __all__ = ["read_params","read_data"]
 
@@ -81,6 +81,7 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
     ----
     - If veloc is True, returns the velocity components separately.
     - If surface is True, returns the surface data.
+    
     Otherwise, returns the data as a numpy array.
     '''
 

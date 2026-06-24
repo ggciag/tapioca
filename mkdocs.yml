@@ -10,6 +10,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             docstring_style: numpy
             show_root_heading: true
@@ -25,3 +26,4 @@ nav:
     - Post-processing: references/postproc.md
     - Inputs: references/inputs.md
     - Plotter: references/plotter.md
+    - Auxiliaries: references/auxiliaries.md
