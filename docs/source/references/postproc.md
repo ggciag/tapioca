@@ -46,6 +46,27 @@ Methods of the `MandyocScen` class.
 
 ```
 
-## Post-Processing Acessors and Functions
+## Post-Processing Accessors and Functions
 
 Post-processing acessors and functions are in `post_processing.py`. 
+
+The `scenPostProcessing` class is a DataTree accessor for calculating common post-processing tasks and routines. 
+This class registers under the ``postproc`` namespace for ``MandyocScen`` class providing methods to compute physical properties directly on the DataTree structure.
+
+```{eval-rst}
+.. currentmodule:: tapioca.post_processing
+
+.. autosummary::
+   :toctree: ../generated/
+
+   scenPostProcessing.DeviatoricStressTensor
+```
+
+---
+
+Example:
+```python
+scen = MS('example-scen', name='Example',
+                   variables=['density','temperature','viscosity','velocity'])
+scen.DTree.postproc.DeviatoricStressTensor()
+```

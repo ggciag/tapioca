@@ -41,7 +41,7 @@ VARS_TYPES:dict = { # Outputs
 }
 """dict: Dictionary with datatypes (value) for each variable (key)."""
 
-SEC_PER_YEAR:int = 60*60*24*365.25 # seconds per year
+SEC_PER_YEAR:float = 60*60*24*365.25 # seconds per year
 """float: Conversion factor of seconds in a year."""
 
 CM:float = 1/2.54 # cm per inch -> convert plotting to centimeters by *cm 

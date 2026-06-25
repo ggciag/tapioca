@@ -23,6 +23,18 @@ The auxiliary functions are located in the file `aux_functions.py` and are usefu
 
 ## Auxiliary variables
 
-The auxiliary variables are located in the file `_variables.py` and can be called by the users.
+The auxiliary variables are located in the file `_variables.py` and can be called by the users. Mostly are global variables that should not be modified.
 
-.. autofunction:: tapioca._variables
+```{eval-rst}
+
+.. currentmodule:: tapioca._variables
+
+.. autosummary::
+   :toctree: ../generated/
+   
+   CM
+   SEC_PER_YEAR
+   VARIABLES_LIST
+   VARS_TYPES
+
+```
