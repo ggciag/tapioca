@@ -106,7 +106,7 @@ class MandyocScen:
         The designated name of the scenario.
     params : dict
         A dictionary of the parameters parsed from `param.txt`.
-    DTree : datatree.DataTree
+    DTree : xarray.DataTree
         The hierarchical data structure containing all loaded model outputs.
     xlimits : list of float
         The horizontal spatial limits applied to the data.
