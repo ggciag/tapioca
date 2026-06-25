@@ -25,7 +25,8 @@ extensions = [
     "sphinx.ext.napoleon",   # Understands the NumPy docstring format
     "sphinx.ext.autosummary", # Creates the neat Xarray-style API tables
     "sphinx.ext.intersphinx", # Link objects and classes to external docs
-    'sphinx.ext.mathjax'
+    'sphinx.ext.mathjax',
+    'sphinx_rtd_theme'
 ]
 
 # Parameters
@@ -36,7 +37,7 @@ napoleon_use_ivar = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "xarray": ("https://docs.xarray.dev/en/stable/api/", None),
+    "xarray": ("https://docs.xarray.dev/en/stable/", None),
     "pandas": ("https://pandas.pydata.org/docs/", None),
 }
 
@@ -55,7 +56,7 @@ language = 'en'
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'pydata_sphinx_theme'
+html_theme = 'sphinx_rtd_theme'
 #html_static_path = ['_static']
 
 

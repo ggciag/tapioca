@@ -85,13 +85,9 @@ class scenPostProcessing:
             (`tau_xx`, `tau_zz`, `tau_xz`, and optionally `tau_J2`).
 
         
-        Notes
-        -----
-        **Signal Convention:**
-        * Positive values indicate extension.
-        * Negative values indicate compression.
 
-        
+        Description
+        -----------
         The deviatoric stress tensor :math:`\tau_{ij}` (or :math:`\sigma_{ij}'`) is calculated 
         through the relation presented in Gerya(2019):
 
@@ -104,6 +100,15 @@ class scenPostProcessing:
 
         .. math::
             \dot{\epsilon}_{ij} = \frac{1}{2} \left( \frac{\partial v_i}{\partial x_j} + \frac{\partial v_j}{\partial x_i} \right)
+        
+        Notes
+        -----
+        Velocity and viscosity fields must be already loaded on the mesh Dataset.
+
+        **Signal Convention:**
+
+        * Positive values indicate extension.
+        * Negative values indicate compression.
         
         """
 
