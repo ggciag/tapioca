@@ -8,7 +8,15 @@ Auxiliares functions, variables and classes that support tapIOca routines.
 
 The auxiliary functions are located in the file `aux_functions.py` and are useful for both classes and for users who want to perform specific tasks (e.g. just read params).
 
-.. autofunction:: tapioca._aux_functions
+```{eval-rst}
+.. currentmodule:: tapioca._aux_functions
+
+.. autosummary::
+   :toctree: ../generated/
+
+    read_params
+    read_data
+```
 
 
 ---
