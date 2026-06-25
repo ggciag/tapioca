@@ -50,8 +50,11 @@ viz = [
 ]
 
 docs = [
-    "mkdocs-material>=9",
-    "mkdocstrings[python]"
+    "sphinx-autobuild",
+    "myst-parser",
+    "sphinx",
+    "pydata-sphinx-theme",
+    "sphinx-copybutton"
 ]
 
 [tool.setuptools.packages.find]
