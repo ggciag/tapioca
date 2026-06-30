@@ -1,3 +1,5 @@
-## Quick start
+# Quick start
 
-Check an [example here](../../tests/initial_example.ipynb)
+## Post-processing
+
+Check examples at `tests/initial_example.ipynb`.

@@ -5,7 +5,7 @@
 ## About
 
 The current version (v0.1.0) of tapIOca enables the manipulation of Mandyoc outputs from .nc files.
-These netCDF files must be created from text file outputs containing the "x", "z" and "time" dimensions. Future versions of Mandyoc will natively support these output formats. In the meantime, you can use {doc}`Julia scripts <../../../src/postrunning/README>` to format your .txt data. You can send an e-mail to [jbueno@usp.br](mailto:jbueno@usp.br) in case of any question.
+These netCDF files must be created from text file outputs containing the "x", "z" and "time" dimensions. Future versions of Mandyoc will natively support these output formats. In the meantime, you can use Julia scripts (on `/src/postprocessing`) to format your .txt data. You can send an e-mail to [jbueno@usp.br](mailto:jbueno@usp.br) in case of any question.
 
 Future implementations of tapIOca are planned to include:
 
