@@ -1,0 +1,22 @@
+name: tapioca
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - pip
+  - matplotlib
+  - xarray >= 2025
+  - pyvista
+  - pythreejs
+  - jupyterlab
+  - ipython
+  - scipy
+  - numpy 
+  - ipyvtklink
+  - shapely
+  - astropy
+  - pymp-pypi
+  - numba
+  - h5netcdf
+  - dask
