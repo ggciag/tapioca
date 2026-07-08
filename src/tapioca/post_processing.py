@@ -1,4 +1,4 @@
-import os, gc, json, sys, glob, pymp
+import os, gc, json, sys, glob
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap

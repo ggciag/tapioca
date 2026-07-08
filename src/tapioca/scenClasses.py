@@ -1,13 +1,10 @@
-import os, gc, json, sys, glob, pymp
+import os, gc, json, glob
 from pathlib import Path
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 from scipy.interpolate import RegularGridInterpolator
 
 import numpy as np
-import pandas as pd
 import xarray as xr
-from xarray import DataTree, register_datatree_accessor
+from xarray import DataTree
 
 from ._variables import VARS_TYPES, VARIABLES_LIST
 from ._aux_functions import read_params

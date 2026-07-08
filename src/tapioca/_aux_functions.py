@@ -1,7 +1,6 @@
-import os, gc, json, sys, glob, pymp
+import os, gc, json, sys, glob
 
 import numpy as np
-import matplotlib.pyplot as plt
 import xarray as xr
 import pandas as pd
 
