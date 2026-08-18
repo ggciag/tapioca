@@ -156,7 +156,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     dtypes = scen.datatypes
     vtype = dtypes[variable]
     x_coords = dtypes["x"].(range(0.0f0, Lx, length=Nx))
-    z_coords = dtypes["z"].(range(0.0f0, Lz, length=Nz))
+    z_coords = dtypes["z"].(range(-Lz, 0.0f0, length=Nz))
 
     steps = scen.steps
     times = scen.times
@@ -374,7 +374,7 @@ function convert_litho_to_nc(scen::MandyocScenario,mesh::mesh2D,cores::Integer)
     @info "Finished! Total time: $(round(total_elapsed / 60, digits=2)) minutes."
     
     x_coords_litho = dtypes["x"].(range(0.0f0, Lx, length=Nxl))
-    z_coords_litho = dtypes["z"].(range(0.0f0, Lz, length=Nzl))
+    z_coords_litho = dtypes["z"].(range(-Lz, 0.0f0, length=Nzl))
     
     # Creating netcdf file
     Dataset(nc_fname, "c") do ds
@@ -415,7 +415,7 @@ function build_scenario(params::Dict)
     # Change data types in case of non dimensional scenarios 
     if get(params,"iterative","direct") == "iterative" || get(params,"nondimensionalization","False") == "True" || dims == 3
         for v in keys(DTYPES) DTYPES[v] = Float64 end
-        global AIR_DENSITY_THRESHOLD = 0
+        global AIR_DENSITY_THRESHOLD = -1
         println("You did run a non dimensional model, all datatypes changed to Float64.")
     end
 
