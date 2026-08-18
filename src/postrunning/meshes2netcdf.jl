@@ -11,8 +11,8 @@ using DataFrames
 using Base.Threads
 using StatsBase
 
-global AIR_DENSITY_THRESHOLD = 20
-global LITHOLOGY_DATATYPE = UInt8
+global AIR_DENSITY_THRESHOLD = -999
+global LITHOLOGY_DATATYPE = Int8
 global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
 
 global UNITS =Dict{String,String}(
@@ -112,17 +112,17 @@ function read_data(var::String, step::Integer, mesh::mesh2D, vartype::Type; velo
     
     
     if veloc 
-        C[C .< 1e-200] .= 0
+        C[abs.(C) .< 1e-50] .= 0
         vx = transpose(reshape(C[1:2:end], (Nx, Nz)))
-        vy = transpose(reshape(C[2:2:end], (Nx, Nz)))
-        R = (vx,vy)
+        vz = transpose(reshape(C[2:2:end], (Nx, Nz)))
+        R = (vx,vz)
         return R
     
     elseif surface
         return (C[1:end,1],C[1:end,2]) #sx, sy
     
     else
-        C[C .< 1e-200] .= 0
+        C[abs.(C) .< 1e-50] .= 0
         R = transpose(reshape(C[1:end], (Nx, Nz)))
         return R
     end
@@ -170,7 +170,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     veloc = (variable == "velocity")
     surface = (variable == "surface")
     
-    local buffer_vx, buffer_vy, buffer_var, buffer_surf, surface_nx, surface_x_coords
+    local buffer_vx, buffer_vz, buffer_var, buffer_surf, surface_nx, surface_x_coords
     
     if surface
         sx_sample,_ = read_data("surface", 0, mesh ,dtypes["surface"], veloc=false, surface=true)
@@ -180,7 +180,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
 
     elseif veloc
         buffer_vx = zeros(dtypes["velocity"], Nx, Nz, num_steps)
-        buffer_vy = zeros(dtypes["velocity"], Nx, Nz, num_steps)
+        buffer_vz = zeros(dtypes["velocity"], Nx, Nz, num_steps)
     else
         buffer_var = zeros(vtype, Nx, Nz, num_steps)
     end
@@ -197,11 +197,11 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
             
 	    if veloc
                 dens = read_data("density",step,mesh,dtypes["density"],veloc=false, surface=false)
-                vx,vy = data
+                vx,vz = data
                 vx[dens.<AIR_DENSITY_THRESHOLD] .= 0
-                vy[dens.<AIR_DENSITY_THRESHOLD] .= 0
+                vz[dens.<AIR_DENSITY_THRESHOLD] .= 0
 		        buffer_vx[:, :, i] = vx'
-                buffer_vy[:, :, i] = vy'
+                buffer_vz[:, :, i] = vz'
                 
             elseif surface
 
@@ -252,11 +252,11 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
                                                                 "long_name"=>"vx"),
                                                                 deflatelevel=dfllevel, shuffle=true)
             
-            defVar(ds,"vy",vtype,("x","z","time"),attrib=Dict("units"=>units[variable],
-                                                                "long_name"=>"vy",),
+            defVar(ds,"vz",vtype,("x","z","time"),attrib=Dict("units"=>units[variable],
+                                                                "long_name"=>"vz",),
                                                                deflatelevel=dfllevel, shuffle=true)
             ds["vx"][:, :, :] = buffer_vx
-            ds["vy"][:, :, :] = buffer_vy
+            ds["vz"][:, :, :] = buffer_vz
             
         elseif surface
             defDim(ds,"x",surface_nx)
