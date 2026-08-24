@@ -276,9 +276,9 @@ class MandyocScen:
         Parameters
         ----------
         factor : float, optional
-            The value to subtract from the Z-coordinates (in meters). 
+            The value to sum into the Z-coordinates (in meters).
             If None, it is calculated automatically as
-            `(self.ZMAX - self.thick_air)`. 
+            `(self.ZMAX + self.thick_air)`. 
             
             Default is None.
 
@@ -303,7 +303,7 @@ class MandyocScen:
             return False
         
         if factor is None:
-            factor = self.ZMAX - self.thick_air
+            factor = self.thick_air 
         
         # Traverse specific tree nodes and apply Z-correction if 'z' exists
         structs_to_check = ['/mesh', '/surface','/particles']
@@ -314,27 +314,46 @@ class MandyocScen:
         
         for node in mesh_nodes:
             node_ds = self.DTree['/mesh'][node].ds
-            self.DTree['/mesh'][node] = node_ds.assign_coords(z=(node_ds['z'] - factor))
+            self.DTree['/mesh'][node] = node_ds.assign_coords(z=(node_ds['z'] + factor))
         
         # Add a If condition for when the used does not load all data types
         for node in surface_nodes:    #O script em julia está exportando com a superfície corrigida, mudar para exportar com o dado ORIGINAL
             node_ds = self.DTree['/surface'][node].ds
-            self.DTree['/surface'][node] = node_ds.assign(surface=(node_ds['surface'] - factor))
+            self.DTree['/surface'][node] = node_ds.assign(surface=(node_ds['surface'] + factor))
 
         for node in particles_nodes:
             node_ds = self.DTree['/particles'][node].ds
-            self.DTree['/particles'][node] = node_ds.assign(z=(node_ds['z'] - factor))
+            self.DTree['/particles'][node] = node_ds.assign(z=(node_ds['z'] + factor))
 
-        self.zlimits = [self.zlimits[0] - factor, self.zlimits[1] - factor]
-        self.ZMAX -= factor
-        self.ZMIN -= factor
+        # The dataset attributes must be updated too
+        self.zlimits = [self.zlimits[0] + factor, self.zlimits[1] + factor]
+        self.ZMAX += factor
+        self.ZMIN += factor
         
         if self.verbose:
-            print(f"Z coordinate corrected by subtracting {factor} m")
+            print(f"Z coordinate corrected by + {factor} m")
             print(f"New z limits: {self.zlimits}")
             
         self.z_corrected = True
         return True
+
+    def filter_air_fields(self, dens_threshold=10.0, air_value=-1):
+        """
+        Filters variable fields of the sticky air layer by density.
+        All densities below a threshold will be considered air. 
+
+        Parameters
+        ----------
+        dens_threshold : float
+            The maximum density to consider the air layer, in kg/m^3.
+
+            Default is 10.
+        air_value : int or float
+            The new value into air layer.
+
+            Default is -1.
+        """
+        return
 
     def _load_spatial_var(self, variable, chunks={}):
         """

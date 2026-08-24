@@ -42,7 +42,7 @@ class scenPostProcessing:
         return None
     
     def DeviatoricStressTensor(self, components='all', J2=True, mesh_upscaled=False,
-                    units='MPa', export_nc=False):
+                    unit='MPa', export_nc=False):
         r"""
         Calculates the deviatoric stress tensor and second invariant (J2).
 
@@ -54,8 +54,8 @@ class scenPostProcessing:
         Parameters
         ----------
         components : list of str; or str, optional
-            The specific tensor components to calculate. Currently defaults to 'all'.
-            (Future improvement: filtering specific components for the 3D version).
+            The specific tensor components to calculate. Default is 'all'.
+            
         J2 : bool, optional
             If True, calculates the second invariant of the deviatoric stress 
             tensor (J2) and appends it to the mesh. 
@@ -66,8 +66,8 @@ class scenPostProcessing:
             rather than the original mesh. (Future improvement). 
             
             Default is False.
-        units : str, optional
-            The physical units for the calculated stress. Supports 'MPa' 
+        unit : str, optional
+            The physical unit for the calculated stress (Pa, kPa, MPa, or GPa). 
             (scales the output by $10^6$) or standard Pascals. 
             
             Default is 'MPa'.
@@ -113,16 +113,26 @@ class scenPostProcessing:
         """
 
         dtype = self.varsTypes['deviatoric_stress']
-        tau_factor = 1.0
-        if units == 'MPa':
-            tau_factor = 1e6
 
+        units_dic = {'GPa' :1e9,
+         'MPa':1e6,
+         'kPa':1e3,
+         'Pa':1.0}
+
+        tau_factor = units_dic[unit]
+        print(f'dev stress is given in {unit} ({tau_factor})')
+
+        # (Future improvement: filtering specific components for the 3D version).
+        if components == 'all':
+            components = ['tau_xx','tau_zz','tau_xz']
+        elif type(components) == str:
+            components = [components]
         
         scen = self.scenario
         mesh = scen.mesh['original'].to_dataset()
 
         vx = mesh['vx']
-        vz = mesh['vy'] # current export uses vy instead vz, it must be rewrite for the 3D version
+        vz = mesh['vz']
         visc = mesh['viscosity']
 
         # calculate the strain tensor components
@@ -136,16 +146,16 @@ class scenPostProcessing:
         
         self.scenario['/mesh/original']['tau_xz'] = (visc * (dvx_dz + dvz_dx) / tau_factor).astype(dtype) 
 
-        for comp in ['tau_xx','tau_zz','tau_xz']:
+        for comp in components:
             self.scenario['/mesh/original'][comp].attrs['long_name'] = comp
-            self.scenario['/mesh/original'][comp].attrs['units'] = units
+            self.scenario['/mesh/original'][comp].attrs['units'] = unit
             self.scenario['/mesh/original'][comp].attrs['description'] = f'component {comp} of the deviatoric stress tensor'
         
         self.scenario['/mesh/original']['tau_xz'].attrs['note'] = 'tau_xz = tau_zx'
         
         if J2==True:
             self.scenario['/mesh/original']['tau_J2'] = 1/2 * (self.scenario['/mesh/original']['tau_xx']**2 + self.scenario['/mesh/original']['tau_zz']**2) + self.scenario['/mesh/original']['tau_xz']**2
-            self.scenario['/mesh/original']['tau_J2'].attrs['units'] = units
+            self.scenario['/mesh/original']['tau_J2'].attrs['units'] = unit
             self.scenario['/mesh/original']['tau_J2'].attrs['long_name'] = 'second invariant of the deviatoric stress tensor'
         
         if export_nc:
