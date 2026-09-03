@@ -6,7 +6,7 @@ import pandas as pd
 
 from pathlib import Path
 
-from ._variables import SEC_PER_YEAR, VARIABLES_LIST
+from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS
 
 __all__ = ["read_params","read_data"]
 
@@ -103,8 +103,7 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
         vy = np.reshape(data[1::2], (Nx,Nz), order='F')
         data = (vx.T, vy.T)
     return data
-
-
+        
 #====== OLD/DEPRECATED FUNCTIONS ======
 
 def _old_get_rank(cdir:str) -> int:

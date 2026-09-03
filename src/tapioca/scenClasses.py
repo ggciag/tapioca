@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from xarray import DataTree
 
-from ._variables import VARS_TYPES, VARIABLES_LIST
+from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS
 from ._aux_functions import read_params
 
 #Mandyoc Scenario class
@@ -671,4 +671,135 @@ class MandyocScen:
         self.DTree[source_path][variable] = pts
 
         gc.collect()
+        return self
+
+
+class MandyocBuilder:
+
+    def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, Ny:int=0, Ly:float=0, verbose:bool=True):
+        self.path = path
+        self.verbose = verbose
+
+        self.Nx = Nx
+        self.Nz = Nz
+        self.Lx = Lx
+        self.Lz = -Lz
+        self.Ly = self.Ny = self.y = None
+        self.dimensions = 2
+
+        self.x = np.linspace(0, self.Lx, self.Nx)
+        self.z = np.linspace(self.Lz, 0, self.Nz)
+
+        # Creating the DataTree structure to store the model layers
+        self.DTree = DataTree.from_dict( {"field":
+                            xr.Dataset(coords={'x': self.x, 'z': self.z}), 
+                                    "interfaces":xr.Dataset(coords={'x': self.x})})
+
+        self.DTree['/field']["x"].attrs["units"] = "m"
+        self.DTree['/field']["z"].attrs["units"] = "m"
+        self.DTree['/field'].attrs["description"] = "This group contains the field of the model, each variable is a DataArray considering the material properties from the interfaces."
+
+        self.DTree['/interfaces']["x"].attrs["units"] = "m"
+        self.DTree['/interfaces'].attrs["description"] = "This group contains the interfaces of the model, each interface is a DataArray with the depth and the material properties as attributes."
+        
+        # setting the model dimensions
+        if Ny>0 and abs(Ly)>0:
+            self.Ly = Ly
+            self.Ny = Ny
+            self.dimensions = 3
+            self.y = np.linspace(0, self.Ly, self.Ny)
+            self.DTree = DataTree.from_dict( {"field":
+                                xr.Dataset(coords={'x': self.x, 'y': self.y, 'z': self.z}), 
+                                        "interfaces":xr.Dataset(coords={'x': self.x, 'y': self.y})})
+
+            self.DTree['/field'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
+            self.DTree['/interfaces'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
+            
+            self.DTree['/field']["y"].attrs["units"] = "m"
+            self.DTree['/interfaces']["y"].attrs["units"] = "m"
+            
+            
+                
+
+
+    def create_interface(self, id_layer:int, position, interface_name:str=None, **material):
+
+        if interface_name==None:
+            interface_name = f'interface_{id_layer}'
+                
+        # Defining material properties
+        interface_parameters = DEFAULT_MATERIAL.copy() # default material
+
+        for k in list(material.keys()):
+            interface_parameters[k] = material[k]
+
+            if self.verbose==True:
+                print(f'{k}:{interface_parameters[k]}')
+
+        if interface_parameters['rho'] == None:
+            raise ValueError("ERROR: You must to set a density (rho) to the material interface!")
+
+
+        if id_layer!=-1:
+            interface_coords = self._evaluate_interface_position(position)
+            #create a default interface at the top of the model (ZMAX)
+
+        else:
+            print(f'''Layer with ID {id_layer} is the top layer, it contains the initial material 
+            properties of the model that is above the last interface.\n
+            You can set material properties for this layer, but you cannot create an interface.''')
+            
+            interface_coords = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
+            interface_coords *= 0
+
+        if self.dimensions==2:
+            self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x], 
+                                                                              dims=['x'], name=interface_name))
+            
+
+        elif self.dimensions==3:
+            self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x,self.y], 
+                                                                                 dims=['x','y'], name=interface_name))
+
+
+        self.DTree['/interfaces'][interface_name].attrs['id'] = id_layer
+        self.DTree['/interfaces'][interface_name].attrs.update(interface_parameters)
+        return self
+
+    def _evaluate_interface_position(self, coord):
+        """
+        internal method to verify what type of coordinate or position the interface
+        is recieving 
+        """
+
+        if isinstance(coord,float) or isinstance(coord,int):
+            print('The interface is a flat line/surface')
+            coordArray = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
+            return coordArray*coord
+
+        # Verify if the coord is a bunch of points to interpolate or is the whole interface (line/surface)
+        elif isinstance(coord,np.array) and self.dimensions==2:
+            print('The interface is a line, interpolating the points to create the interface')
+
+            if len(coord[0])!=2:
+                raise ValueError("ERROR: The coordinates for the interface must be a 2D array with two columns (x,z).")
+
+            return np.interp(self.x, coord[:,0], coord[:,1])
+        
+        else:
+            raise ValueError("ERROR: The coordinates for the interface must be a float, int for 2D and 3D models, or a 2D array with two columns (x,z) for 2D models.")
+
+        # Add interfaces from Shapely geometries
+        
+        return None
+    
+    def set_params(self, **kwargs):
+        """
+        Set parameters for the model
+        """
+
+        # create a function to evaluate params!
+
+        self.params = kwargs
+        
         return self
