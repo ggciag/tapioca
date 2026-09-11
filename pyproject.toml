@@ -33,7 +33,6 @@ dependencies = [
     "h5netcdf",     
     "shapely",
     "astropy",
-    "pymp-pypi",
     "numba",
     "dask"
 ]
