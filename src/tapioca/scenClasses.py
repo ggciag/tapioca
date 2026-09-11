@@ -1,5 +1,8 @@
 import os, gc, json, glob
 from pathlib import Path
+from shapely.geometry import Polygon
+from shapely import to_ragged_array
+
 from scipy.interpolate import RegularGridInterpolator
 
 import numpy as np
@@ -717,9 +720,6 @@ class MandyocBuilder:
             
             self.DTree['/field']["y"].attrs["units"] = "m"
             self.DTree['/interfaces']["y"].attrs["units"] = "m"
-            
-            
-                
 
 
     def create_interface(self, id_layer:int, position, interface_name:str=None, **material):
@@ -766,6 +766,57 @@ class MandyocBuilder:
         self.DTree['/interfaces'][interface_name].attrs.update(interface_parameters)
         return self
 
+
+    def add_interface_from_shapely(self, layer:str, polygon:Polygon, poly_name:str=None, **material): # 2D
+    
+        polycoords = to_ragged_array([polygon])[1]
+        xmin,zmin, xmax,zmax = polygon.bounds
+        mid_z = (zmin+zmax)/2
+
+        if self.verbose:
+            print(f'Polygon bounds: ({xmin,zmin}) ({xmax,zmax})')
+            print(f'Mid line is at {mid_z} m')
+        
+        top_args = polycoords[:,1] >= mid_z
+        bot_args = polycoords[:,1] < mid_z
+        
+        x_top = np.append(0, polycoords[:,0][top_args][1:])
+        x_top = np.append(x_top, self.Lx)
+
+        z_top = np.append(mid_z,polycoords[:,1][top_args][1:])
+        z_top = np.append(z_top, mid_z)
+
+        x_bot = np.append(0, polycoords[:,0][bot_args][1:])
+        x_bot = np.append(x_bot, self.Lx)
+
+        z_bot = np.append(mid_z,polycoords[:,1][bot_args][1:])
+        z_bot = np.append(z_bot, mid_z)
+
+        bot_interface = np.array([x_bot,z_bot]).T
+        top_interface = np.array([x_top,z_top]).T
+
+        print(bot_interface)
+        
+        # handle with the ids
+        interfaces_names = list(self.DTree.interfaces.variables)[:-1]
+        id_above = self.DTree['/interfaces'][layer].attrs['id']
+
+        for n in interfaces_names:
+            if self.DTree['/interfaces'][n].attrs['id'] == id_above:
+                above_material = self.DTree['/interfaces'][n].attrs.copy()
+                if self.verbose:
+                    print(f"Above layer is: ({self.DTree['/interfaces'][n].attrs['id']}) {n}")
+
+            if self.DTree['/interfaces'][n].attrs['id'] >= id_above:
+                self.DTree['/interfaces'][n].attrs['id'] += 2
+
+
+        self.create_interface(id_above,bot_interface,interface_name=f'bot_{poly_name}',**above_material)
+        self.create_interface(id_above+1,top_interface,interface_name=f'top_{poly_name}',**material)
+
+
+        return self
+
     def _evaluate_interface_position(self, coord):
         """
         internal method to verify what type of coordinate or position the interface
@@ -784,7 +835,9 @@ class MandyocBuilder:
             if len(coord[0])!=2:
                 raise ValueError("ERROR: The coordinates for the interface must be a 2D array with two columns (x,z).")
 
-            return np.interp(self.x, coord[:,0], coord[:,1])
+            args_sorted = np.argsort(coord[:,0])
+            
+            return np.interp(self.x, coord[:,0][args_sorted], coord[:,1][args_sorted])
         
         else:
             raise ValueError("ERROR: The coordinates for the interface must be a float, int for 2D and 3D models, or a 2D array with two columns (x,z) for 2D models.")
