@@ -1,6 +1,6 @@
 import os, gc, json, glob
 from pathlib import Path
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon,LineString
 from shapely import to_ragged_array
 
 from scipy.interpolate import RegularGridInterpolator
@@ -768,34 +768,49 @@ class MandyocBuilder:
 
 
     def add_interface_from_shapely(self, layer:str, polygon:Polygon, poly_name:str=None, **material): # 2D
-    
+
         polycoords = to_ragged_array([polygon])[1]
         xmin,zmin, xmax,zmax = polygon.bounds
         mid_z = (zmin+zmax)/2
 
         if self.verbose:
             print(f'Polygon bounds: ({xmin,zmin}) ({xmax,zmax})')
-            print(f'Mid line is at {mid_z} m')
+            print(f'Mid line is at {mid_z} m depth')
         
         top_args = polycoords[:,1] >= mid_z
         bot_args = polycoords[:,1] < mid_z
         
-        x_top = np.append(0, polycoords[:,0][top_args][1:])
+        x_top = np.append(0, polycoords[:,0][top_args])
         x_top = np.append(x_top, self.Lx)
 
-        z_top = np.append(mid_z,polycoords[:,1][top_args][1:])
+        z_top = np.append(mid_z,polycoords[:,1][top_args])
         z_top = np.append(z_top, mid_z)
 
-        x_bot = np.append(0, polycoords[:,0][bot_args][1:])
+        x_bot = np.append(0, polycoords[:,0][bot_args])
         x_bot = np.append(x_bot, self.Lx)
 
-        z_bot = np.append(mid_z,polycoords[:,1][bot_args][1:])
+        z_bot = np.append(mid_z,polycoords[:,1][bot_args])
         z_bot = np.append(z_bot, mid_z)
+
+        # handle with the mid line intersection
+        mid_line = LineString([(0,mid_z),(self.Lx,mid_z)])
+        mid_x, mid_z = mid_line.intersection(polygon).xy
+
+        x_top = np.append( list(mid_x)[0]-0.01, x_top )
+        x_bot = np.append( list(mid_x)[0]-0.01, x_bot )
+
+        x_top = np.append( list(mid_x)[1]+0.01, x_top )
+        x_bot = np.append( list(mid_x)[1]+0.01, x_bot )
+
+        z_top = np.append( list(mid_z)[0], z_top )
+        z_bot = np.append( list(mid_z)[0], z_bot )
+
+        z_top = np.append( list(mid_z)[1], z_top )
+        z_bot = np.append( list(mid_z)[1], z_bot )
+
 
         bot_interface = np.array([x_bot,z_bot]).T
         top_interface = np.array([x_top,z_top]).T
-
-        print(bot_interface)
         
         # handle with the ids
         interfaces_names = list(self.DTree.interfaces.variables)[:-1]
@@ -807,10 +822,13 @@ class MandyocBuilder:
                 if self.verbose:
                     print(f"Above layer is: ({self.DTree['/interfaces'][n].attrs['id']}) {n}")
 
-            if self.DTree['/interfaces'][n].attrs['id'] >= id_above:
+            if (self.DTree['/interfaces'][n].attrs['id'] >= id_above) and (id_above > 0):
                 self.DTree['/interfaces'][n].attrs['id'] += 2
 
-
+        # in case the polygon is within the air (-1)
+        if id_above < 0:
+            id_above = len(interfaces_names)+1
+        
         self.create_interface(id_above,bot_interface,interface_name=f'bot_{poly_name}',**above_material)
         self.create_interface(id_above+1,top_interface,interface_name=f'top_{poly_name}',**material)
 
