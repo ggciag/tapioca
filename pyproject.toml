@@ -31,7 +31,7 @@ dependencies = [
     "scipy",
     "h5py",
     "h5netcdf",     
-    "shapely",
+    "shapely>=2.1.2",
     "astropy",
     "numba",
     "dask"

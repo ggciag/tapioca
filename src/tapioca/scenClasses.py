@@ -2,7 +2,7 @@ import os, gc, json, glob
 from pathlib import Path
 from shapely.geometry import Polygon,LineString
 from shapely import to_ragged_array
-
+import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
 import numpy as np
@@ -679,7 +679,35 @@ class MandyocScen:
 
 class MandyocBuilder:
 
-    def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, Ny:int=0, Ly:float=0, verbose:bool=True):
+    def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, Ny:int=0, Ly:float=0.0, verbose:bool=True):
+        """
+        Class to facilitate the creation of Mandyoc scenarios.
+
+        Parameters
+        ----------
+
+        path : str
+
+        Nx : int
+
+        Nz : int
+
+        Lx : float
+
+        Lz : float
+
+        Ny : int, optional
+
+            Default is 0.
+
+        Ly : float, optional
+
+            Default is 0.0.
+        
+        verbose : bool, optional
+
+            Default is True.
+        """
         self.path = path
         self.verbose = verbose
 
@@ -720,9 +748,21 @@ class MandyocBuilder:
             
             self.DTree['/field']["y"].attrs["units"] = "m"
             self.DTree['/interfaces']["y"].attrs["units"] = "m"
+            
+    def _print_verbose(self, message:str):
+        '''
+        Internal method to print a message if verbose is True
 
+        Parameters
+        ----------
+        message : str
+            The printed message
+        '''
+        if self.verbose:
+            print(message)
+        return None
 
-    def create_interface(self, id_layer:int, position, interface_name:str=None, **material):
+    def create_interface(self, id_layer:int, position:float|np.ndarray, interface_name:str=None, **material):
 
         if interface_name==None:
             interface_name = f'interface_{id_layer}'
@@ -733,8 +773,7 @@ class MandyocBuilder:
         for k in list(material.keys()):
             interface_parameters[k] = material[k]
 
-            if self.verbose==True:
-                print(f'{k}:{interface_parameters[k]}')
+            self._print_verbose(f'{k}:{interface_parameters[k]}')
 
         if interface_parameters['rho'] == None:
             raise ValueError("ERROR: You must to set a density (rho) to the material interface!")
@@ -752,6 +791,9 @@ class MandyocBuilder:
             interface_coords = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
             interface_coords *= 0
 
+        # Check interface_coords shape and values to ensure they are within the model bounds
+        # self._check_coords(interface_coords)
+
         if self.dimensions==2:
             self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x], 
                                                                               dims=['x'], name=interface_name))
@@ -767,50 +809,56 @@ class MandyocBuilder:
         return self
 
 
-    def add_interface_from_shapely(self, layer:str, polygon:Polygon, poly_name:str=None, **material): # 2D
+    def add_interface_from_shapely(self, layer:str, polygon:Polygon, poly_name:str=None, intersection_line:str='mid', **material): # 2D
 
         polycoords = to_ragged_array([polygon])[1]
+        polyxcoords = np.unique(polycoords[:,0])
+
         xmin,zmin, xmax,zmax = polygon.bounds
         mid_z = (zmin+zmax)/2
 
-        if self.verbose:
-            print(f'Polygon bounds: ({xmin,zmin}) ({xmax,zmax})')
-            print(f'Mid line is at {mid_z} m depth')
-        
-        top_args = polycoords[:,1] >= mid_z
-        bot_args = polycoords[:,1] < mid_z
-        
-        x_top = np.append(0, polycoords[:,0][top_args])
-        x_top = np.append(x_top, self.Lx)
+        # checking where the null line position
+        if intersection_line == 'top':
+            z_ref = zmax
+        elif intersection_line == 'bottom':
+            z_ref = zmin
+        elif intersection_line == 'mid':
+            z_ref = mid_z
+        else:
+            raise ValueError("The position for the intersection line must be: `top`, `bottom` or `mid`.")
 
-        z_top = np.append(mid_z,polycoords[:,1][top_args])
-        z_top = np.append(z_top, mid_z)
+        self._print_verbose(f'Polygon bounds: ({xmin,zmin}) ({xmax,zmax})')
+        self._print_verbose(f'Intersection line ({intersection_line} line) is at {z_ref} m depth')
 
-        x_bot = np.append(0, polycoords[:,0][bot_args])
-        x_bot = np.append(x_bot, self.Lx)
+        top_intersec_pts = []
+        bot_intersec_pts = []
 
-        z_bot = np.append(mid_z,polycoords[:,1][bot_args])
-        z_bot = np.append(z_bot, mid_z)
+        for x in polyxcoords:
+            vline = LineString([(x,0),(x,self.Lz)])
+            pts_x, pts_y = vline.intersection(polygon).xy
+            pts_x, pts_y = list(pts_x),list(pts_y)
+            if len(pts_x) > 1:
+                top_intersec_pts.append([pts_x[0],pts_y[0]]) # top point
+                bot_intersec_pts.append([pts_x[1],pts_y[1]]) # bot point
 
-        # handle with the mid line intersection
-        mid_line = LineString([(0,mid_z),(self.Lx,mid_z)])
-        mid_x, mid_z = mid_line.intersection(polygon).xy
+            elif len(pts_x) == 1: # append the same point 
+                top_intersec_pts.append([pts_x[0],pts_y[0]])
+                bot_intersec_pts.append([pts_x[0],pts_y[0]])
 
-        x_top = np.append( list(mid_x)[0]-0.01, x_top )
-        x_bot = np.append( list(mid_x)[0]-0.01, x_bot )
+        fac = 1 # m
+        special_points = [ 
+        [xmin-fac, z_ref], # left polygon boundary
+        [xmax+fac, z_ref], # right polygon boundary
+        [0, z_ref], # left boundary
+        [self.Lx, z_ref], # right boundary
+        ]
 
-        x_top = np.append( list(mid_x)[1]+0.01, x_top )
-        x_bot = np.append( list(mid_x)[1]+0.01, x_bot )
+        for sp in special_points:
+            top_intersec_pts.append(sp)
+            bot_intersec_pts.append(sp)
 
-        z_top = np.append( list(mid_z)[0], z_top )
-        z_bot = np.append( list(mid_z)[0], z_bot )
-
-        z_top = np.append( list(mid_z)[1], z_top )
-        z_bot = np.append( list(mid_z)[1], z_bot )
-
-
-        bot_interface = np.array([x_bot,z_bot]).T
-        top_interface = np.array([x_top,z_top]).T
+        top_interface = np.array(top_intersec_pts)
+        bot_interface = np.array(bot_intersec_pts)
         
         # handle with the ids
         interfaces_names = list(self.DTree.interfaces.variables)[:-1]
@@ -819,8 +867,7 @@ class MandyocBuilder:
         for n in interfaces_names:
             if self.DTree['/interfaces'][n].attrs['id'] == id_above:
                 above_material = self.DTree['/interfaces'][n].attrs.copy()
-                if self.verbose:
-                    print(f"Above layer is: ({self.DTree['/interfaces'][n].attrs['id']}) {n}")
+                self._print_verbose(f"Above layer is: ({self.DTree['/interfaces'][n].attrs['id']}) {n}")
 
             if (self.DTree['/interfaces'][n].attrs['id'] >= id_above) and (id_above > 0):
                 self.DTree['/interfaces'][n].attrs['id'] += 2
@@ -842,35 +889,62 @@ class MandyocBuilder:
         """
 
         if isinstance(coord,float) or isinstance(coord,int):
-            print('The interface is a flat line/surface')
+            self._print_verbose('The interface is a flat line/surface')
+        
             coordArray = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
             return coordArray*coord
 
         # Verify if the coord is a bunch of points to interpolate or is the whole interface (line/surface)
-        elif isinstance(coord,np.array) and self.dimensions==2:
-            print('The interface is a line, interpolating the points to create the interface')
+        elif isinstance(coord,np.ndarray) and self.dimensions==2:
+            self._print_verbose('The interface is a line')
 
-            if len(coord[0])!=2:
-                raise ValueError("ERROR: The coordinates for the interface must be a 2D array with two columns (x,z).")
-
-            args_sorted = np.argsort(coord[:,0])
+            if len(coord) == len(self.x):
+                print('The whole interfaces was provided, no need to interpolate')
+                #print(f"WARNING: The number of points provided ({len(coord)}) is different from the number of x-coordinates ({self.Nx}).)
+                return coord
             
+            elif len(coord[0])!=2:
+                raise ValueError("ERROR: The coordinates for the interface must be a 2D array with two columns (x,z).")
+            args_sorted = np.argsort(coord[:,0])
+
             return np.interp(self.x, coord[:,0][args_sorted], coord[:,1][args_sorted])
-        
+
         else:
-            raise ValueError("ERROR: The coordinates for the interface must be a float, int for 2D and 3D models, or a 2D array with two columns (x,z) for 2D models.")
+            raise ValueError("ERROR: The coordinates for the interface must be: " \
+            "float;" \
+            "int for 2D and 3D models; " \
+            "2D array with points (x,z columns) for 2D models.")
 
         # Add interfaces from Shapely geometries
         
         return None
+
+
+    def evaluate_interfaces(self):
+        #analyse if interfaces are crossing each other and to fix it
+
+        return self
+
+    def create_materials_fields(self):
+        #create the xdataarray fields with interfaces params 
+
+        # for p in MATERIAL_PARAMETERS:
+            
+
+
+
+        return self
     
-    def set_params(self, **kwargs):
+    def set_params(self, params_str:str='', **kwargs):
         """
         Set parameters for the model
         """
 
         # create a function to evaluate params!
-
         self.params = kwargs
         
         return self
+
+    def plot_interfaces(self, fig:plt.Figure, axes:plt.Axes, mode:str='fill'):
+
+        return fig, axes
