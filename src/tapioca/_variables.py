@@ -2,7 +2,7 @@ import numpy as np
 
 __all__ = ["VARIABLES_LIST","VARS_TYPES",
            "SEC_PER_YEAR","CM",
-           "INTERFACES_PARAMETERS","DEFAULT_MATERIAL","MATERIAL_PARAMETERS",
+           "INTERFACES_PARAMETERS","DEFAULT_MATERIAL","MATERIAL_PARAMETERS","PARAMETERS_UNITS"
            ]
 
 VARIABLES_LIST:list = ["density",
@@ -51,20 +51,19 @@ CM:float = 1/2.54 # cm per inch -> convert plotting to centimeters by *cm
 """float: Conversion factor of inches to centimeters. Useful to change matplotlib measures."""
 
 INTERFACES_PARAMETERS:dict = {
-    "compositional_factor": "C",
-    "density": "rho",
-    "radiogenic_heat": "H",
-    "pre-exponential_scale_factor": "A",
-    "power_law_exponent": "n",
-    "activation_energy": "Q",
-    "activation_volume": "V",
-    "thermal_diffusivity": "k",
-    "weak_seed_strain": "weakening_seed",
+    "C": "compositional_factor",
+    "rho": "density",
+    "H": "radiogenic_heat",
+    "A": "pre-exponential_scale_factor",
+    "n": "power_law_exponent",
+    "Q": "activation_energy",
+    "V": "activation_volume",
+    "k": "thermal_diffusivity",
+    "weakening_seed": "weak_seed_strain",
     "cohesion_min": "cohesion_min",
     "cohesion_max": "cohesion_max",
     "friction_angle_min": "friction_angle_min",
     "friction_angle_max": "friction_angle_max"
-
 }
 """dict: Dictionary containing the interfaces.txt variables and their corresponding aliases."""
 
@@ -77,7 +76,7 @@ DEFAULT_MATERIAL:dict = {
     "Q": 0.0,
     "V": 0.0,
     "k": 1.0e-6,
-    "weaking_seed": -1,
+    "weakening_seed": -1,
     "cohesion_min": 4e6,
     "cohesion_max": 20e6,
     "friction_angle_min": 2,
@@ -86,6 +85,23 @@ DEFAULT_MATERIAL:dict = {
 """dict: Dictionary containing default properties for the interface material (linear rheology)"""
 
 MATERIAL_PARAMETERS:list = list(DEFAULT_MATERIAL.keys())
+
+PARAMETERS_UNITS:dict = {
+    "rho" : 'kg/m3',
+    "C" : 'dimensionless',
+    "H" : 'W/kg',
+    "A" : 'Pa^(-n)/s',
+    "n" : 'dimensionless',
+    "Q" : 'kJ/mol',
+    "V" : 'm3/mol',
+    "k" : 'm2/s',
+    "weakening_seed" : 'dimensionless',
+    "cohesion_min" : 'Pa',
+    "cohesion_max" : 'Pa',
+    "friction_angle_min": 'degrees',
+    "friction_angle_max": 'degrees',
+}
+"""dict: Dictionary containing the units for each interface parameters."""
 
 # Useful data types descriptions:
 

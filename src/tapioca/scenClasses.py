@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 from xarray import DataTree
 
-from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS
+from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS
 from ._aux_functions import read_params
 
 #Mandyoc Scenario class
@@ -722,13 +722,15 @@ class MandyocBuilder:
         self.z = np.linspace(self.Lz, 0, self.Nz)
 
         # Creating the DataTree structure to store the model layers
-        self.DTree = DataTree.from_dict( {"field":
+        self.DTree = DataTree.from_dict( {"fields":
                             xr.Dataset(coords={'x': self.x, 'z': self.z}), 
                                     "interfaces":xr.Dataset(coords={'x': self.x})})
 
-        self.DTree['/field']["x"].attrs["units"] = "m"
-        self.DTree['/field']["z"].attrs["units"] = "m"
-        self.DTree['/field'].attrs["description"] = "This group contains the field of the model, each variable is a DataArray considering the material properties from the interfaces."
+        self.DTree['/fields']["x"].attrs["units"] = "m"
+        self.DTree['/fields']["z"].attrs["units"] = "m"
+        self.DTree['/fields']["x"].attrs["axis"] = "X"
+        self.DTree['/fields']["z"].attrs["axis"] = "Z"
+        self.DTree['/fields'].attrs["description"] = "This group contains the fields of the model, each variable is a DataArray considering the material properties from the interfaces."
 
         self.DTree['/interfaces']["x"].attrs["units"] = "m"
         self.DTree['/interfaces'].attrs["description"] = "This group contains the interfaces of the model, each interface is a DataArray with the depth and the material properties as attributes."
@@ -739,17 +741,18 @@ class MandyocBuilder:
             self.Ny = Ny
             self.dimensions = 3
             self.y = np.linspace(0, self.Ly, self.Ny)
-            self.DTree = DataTree.from_dict( {"field":
+            self.DTree = DataTree.from_dict( {"fields":
                                 xr.Dataset(coords={'x': self.x, 'y': self.y, 'z': self.z}), 
                                         "interfaces":xr.Dataset(coords={'x': self.x, 'y': self.y})})
 
-            self.DTree['/field'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
+            self.DTree['/fields'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
             self.DTree['/interfaces'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
             
-            self.DTree['/field']["y"].attrs["units"] = "m"
+            self.DTree['/fields']["y"].attrs["units"] = "m"
+            self.DTree['/fields']["y"].attrs["axis"] = "Y"
             self.DTree['/interfaces']["y"].attrs["units"] = "m"
             
-    def _print_verbose(self, message:str):
+    def _print_verbose(self, message:str, ending ="\n"):
         '''
         Internal method to print a message if verbose is True
 
@@ -757,9 +760,13 @@ class MandyocBuilder:
         ----------
         message : str
             The printed message
+
+        ending : str
+            The end of the string text.
+            Default is `\n`.
         '''
         if self.verbose:
-            print(message)
+            print(message,end=ending)
         return None
 
     def create_interface(self, id_layer:int, position:float|np.ndarray, interface_name:str=None, **material):
@@ -770,10 +777,12 @@ class MandyocBuilder:
         # Defining material properties
         interface_parameters = DEFAULT_MATERIAL.copy() # default material
 
+        self._print_verbose(f'ID {id_layer} -> {interface_name}')
         for k in list(material.keys()):
             interface_parameters[k] = material[k]
 
-            self._print_verbose(f'{k}:{interface_parameters[k]}')
+            self._print_verbose(f'{k}:{interface_parameters[k]}', ending="; ")
+        self._print_verbose('')
 
         if interface_parameters['rho'] == None:
             raise ValueError("ERROR: You must to set a density (rho) to the material interface!")
@@ -784,9 +793,7 @@ class MandyocBuilder:
             #create a default interface at the top of the model (ZMAX)
 
         else:
-            print(f'''Layer with ID {id_layer} is the top layer, it contains the initial material 
-            properties of the model that is above the last interface.\n
-            You can set material properties for this layer, but you cannot create an interface.''')
+            print(f'''Layer with ID {id_layer} is the top layer, it contains the initial material properties of the model that is above the last interface.\nYou can set material properties for this layer, but you cannot create an interface.''')
             
             interface_coords = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
             interface_coords *= 0
@@ -926,12 +933,68 @@ class MandyocBuilder:
         return self
 
     def create_materials_fields(self):
+        """
+        Internal method to create fields with the material parameters, according to the interfaces already created.
+
+        This method sorts all interfaces by their ID. Bear in mind that the top layer must have the ID of -1, and the bottom layer must have the ID of 0.
+        """
         #create the xdataarray fields with interfaces params 
 
-        # for p in MATERIAL_PARAMETERS:
-            
+        self._print_verbose("Sorting interfaces by ID:")
+        sorted_interfaces = sorted(self.DTree.interfaces.ds.data_vars, key=lambda v: self.DTree.interfaces.ds[v].attrs['id'])
+        self.DTree.interfaces.ds = self.DTree.interfaces.ds[sorted_interfaces]
 
+        interfaces_names = list(self.DTree.interfaces.variables)[:-1]
+        self._print_verbose(f"{'-'.join(interfaces_names)}")
 
+        for p in MATERIAL_PARAMETERS:
+            field = xr.DataArray(
+                                np.ones((self.Nx, self.Nz))*-999, 
+                                dims=('x', 'z'),
+                                coords={ 'x':self.x, 'z': self.z}
+                                )
+
+            for i in range(len(interfaces_names)):
+                name = interfaces_names[i]
+                curr_interface = self.DTree.interfaces.ds[name]
+                id_layer = curr_interface.attrs['id']
+                fill_value = curr_interface.attrs[p]
+
+                if id_layer < 1:
+                    continue
+                
+                below_interface = self.DTree.interfaces.ds[interfaces_names[i-1]]
+                id_layer_below = below_interface.attrs['id']
+
+                cond = (field.z > below_interface) & (field.z <= curr_interface)
+
+                field = xr.where(cond, fill_value, field)
+
+            # Id 0
+            name = interfaces_names[1]
+            curr_interface = self.DTree.interfaces.ds[name]
+            id_layer = curr_interface.attrs['id']
+            fill_value = curr_interface.attrs[p]
+
+            cond = (field.z <= curr_interface)
+            field = xr.where(cond, fill_value, field)
+
+            # Id -1
+            name = interfaces_names[0]
+            curr_interface = self.DTree.interfaces.ds[name]
+            id_layer = curr_interface.attrs['id']
+            fill_value = curr_interface.attrs[p]
+
+            below_interface = self.DTree.interfaces.ds[interfaces_names[-1]]
+
+            cond = (field.z > below_interface)
+            field = xr.where(cond, fill_value, field)
+
+            field.attrs['parameter'] = INTERFACES_PARAMETERS[p]
+            field.attrs['unit'] = PARAMETERS_UNITS[p]
+
+            self.DTree.fields[p] = field
+            self._print_verbose(f'Field created: {INTERFACES_PARAMETERS[p]} [{PARAMETERS_UNITS[p]}]')
 
         return self
     
