@@ -679,7 +679,9 @@ class MandyocScen:
 
 class MandyocBuilder:
 
-    def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, Ny:int=0, Ly:float=0.0, verbose:bool=True):
+    def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, 
+            Ny:int=0, Ly:float=0.0, thick_air:float=40e3, 
+            verbose:bool=True):
         """
         Class to facilitate the creation of Mandyoc scenarios.
 
@@ -703,6 +705,10 @@ class MandyocBuilder:
         Ly : float, optional
 
             Default is 0.0.
+
+        thick_air : float, optional
+
+            Default is 40e3.
         
         verbose : bool, optional
 
@@ -710,6 +716,7 @@ class MandyocBuilder:
         """
         self.path = path
         self.verbose = verbose
+        self.thick_air = thick_air
 
         self.Nx = Nx
         self.Nz = Nz
@@ -805,11 +812,9 @@ class MandyocBuilder:
             self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x], 
                                                                               dims=['x'], name=interface_name))
             
-
         elif self.dimensions==3:
             self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x,self.y], 
                                                                                  dims=['x','y'], name=interface_name))
-
 
         self.DTree['/interfaces'][interface_name].attrs['id'] = id_layer
         self.DTree['/interfaces'][interface_name].attrs.update(interface_parameters)
@@ -885,7 +890,6 @@ class MandyocBuilder:
         
         self.create_interface(id_above,bot_interface,interface_name=f'bot_{poly_name}',**above_material)
         self.create_interface(id_above+1,top_interface,interface_name=f'top_{poly_name}',**material)
-
 
         return self
 
@@ -997,6 +1001,95 @@ class MandyocBuilder:
             self._print_verbose(f'Field created: {INTERFACES_PARAMETERS[p]} [{PARAMETERS_UNITS[p]}]')
 
         return self
+
+    def export_interfaces(self, export:str='dataset'):
+        '''
+        Export the interfaces created into the "interfaces.txt" file required by Mandyoc.
+
+        Parameters
+        ----------
+
+        export : str, optional
+            Mode of saving the created interfaces into a more readable file. Support modes are 'CSV' and 'dataset' (netcdf file).
+
+            Default is `'dataset'`. 
+        '''
+
+        texts = {p: [] for p in MATERIAL_PARAMETERS}
+        dic_params = {p: [] for p in MATERIAL_PARAMETERS}
+        interfaces_list = []
+
+        interfaces_names = list(self.DTree.interfaces.ds.data_vars)
+        interfaces_names = interfaces_names[1:] + [interfaces_names[0]]
+        
+        self._print_verbose("Exporting dataset to interfaces.txt")
+        self._print_verbose(f"Interfaces: {' -> '.join(interfaces_names)}")
+
+        for name in interfaces_names:    
+            layer = self.DTree.interfaces.ds[name]
+            interface = layer.values
+            material = layer.attrs
+            for p in MATERIAL_PARAMETERS:
+                texts[p].append(str(material[p]))
+
+                if export.lower()=='csv':
+                    dic_params[p].append(material[p])
+
+            interfaces_list.append(interface)
+
+        interfaces_list = np.array(interfaces_list).T
+
+        base_text=f'''C  {"  ".join(texts['C'])}
+        rho  {"  ".join(texts['rho'])}
+        H  {"  ".join(texts['H'])}
+        A  {"  ".join(texts['A'])}
+        n  {"  ".join(texts['n'])}
+        Q  {"  ".join(texts['Q'])}
+        V  {"  ".join(texts['V'])}
+        k  {"  ".join(texts['k'])}
+        weakening_seed  {"  ".join(texts['weakening_seed'])}
+        cohesion_min  {"  ".join(texts['cohesion_min'])}
+        cohesion_max  {"  ".join(texts['cohesion_max'])}
+        friction_angle_min  {"  ".join(texts['friction_angle_min'])}
+        friction_angle_max  {"  ".join(texts['friction_angle_max'])}
+        '''
+
+        max_seq = 0
+        for line in base_text.split("\n"):
+            for seq in line.strip().split('  ')[1:]:
+                # print(seq)
+                max_seq = len(seq.strip()) if len(seq.strip()) > max_seq else max_seq
+
+        max_seq += 3
+        print(max_seq)
+        with open("interfaces.txt", "w") as f:
+            for line in base_text.split("\n")[:-1]:
+                all_seqs = line.strip().split('  ')
+                f.write(all_seqs[0].ljust(21)) # 21 spaces -> len of "friction_angle_***   "
+
+                for seq in all_seqs[1:]: # add parameters text
+                    f.write(''.join(seq).ljust(max_seq))
+
+                f.write("\n")
+
+            np.savetxt(f, interfaces_list, fmt="%.1f")
+
+            f.close()
+
+        if export.lower() == 'dataset':
+            self._print_verbose('Exporting interfaces to NETCDF file')
+            nc_path = os.path.join(self.path, "interfaces_parameters.nc")
+            self.DTree.interfaces.ds.to_netcdf(nc_path)
+    
+        elif export.lower() == 'csv':
+            from pandas import DataFrame
+            self._print_verbose('Exporting interfaces to CSV file')
+            dic_params['name'] = interfaces_names
+            df = DataFrame(dic_params)
+            csv_path = os.path.join(self.path, "interfaces_parameters.csv")
+            df.set_index('name').T.to_csv(csv_path, sep=';')
+            
+        return True
     
     def set_params(self, params_str:str='', **kwargs):
         """
