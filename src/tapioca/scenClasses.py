@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 from xarray import DataTree
 
-from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS
+from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
 from ._aux_functions import read_params
 
 #Mandyoc Scenario class
@@ -1002,6 +1002,48 @@ class MandyocBuilder:
 
         return self
 
+    def create_velocity_field(self, velocbuilder:VelocityFieldBuilder=None, 
+                                  vxconst:float=0,vzconst:float=0):
+    
+        vx = xr.DataArray(
+                        np.ones((self.Nx, self.Nz))*vxconst, 
+                        dims=('x', 'z'),
+                        coords={ 'x':self.x, 'z': self.z}
+                        )
+        
+        vz = xr.DataArray(
+                        np.ones((self.Nx, self.Nz))*vzconst, 
+                        dims=('x', 'z'),
+                        coords={ 'x':self.x, 'z': self.z}
+                        )
+
+        fac = 1
+        if velocbuilder.units == 'cm/y': 
+            fac = 1 / (100 * SEC_PER_YEAR)
+            self._print_verbose('Velocity field are in cm/y, applying corrections...')
+
+        if velocbuilder is not None:
+            vx = xr.where(vx.z==0, velocbuilder.velocs.top.vx, vx).transpose('x', 'z')
+            vx = xr.where(vx.z==self.Lz, velocbuilder.velocs.bot.vx, vx).transpose('x', 'z')
+            vx = xr.where(vx.x==0, velocbuilder.velocs.left.vx, vx).transpose('x', 'z')
+            vx = xr.where(vx.x==self.Lx, velocbuilder.velocs.right.vx, vx).transpose('x', 'z')
+            
+            vz = xr.where(vz.x==0, velocbuilder.velocs.left.vz, vz).transpose('x', 'z')
+            vz = xr.where(vz.x==self.Lx, velocbuilder.velocs.right.vz, vz).transpose('x', 'z')
+            vz = xr.where(vz.z==0, velocbuilder.velocs.top.vz, vz).transpose('x', 'z')
+            vz = xr.where(vz.z==self.Lz, velocbuilder.velocs.bot.vz, vz).transpose('x', 'z')
+
+            self.DTree.fields['vx'] = vx * fac
+            self.DTree.fields['vz'] = vz * fac
+
+
+        self.DTree.fields['vx'].attrs['unit'] = 'm/s'
+        self.DTree.fields['vz'].attrs['unit'] = 'm/s'
+
+        self._print_verbose('Velocity field was created in the scenario builder.')
+
+        return self
+
     def export_interfaces(self, export:str='dataset'):
         '''
         Export the interfaces created into the "interfaces.txt" file required by Mandyoc.
@@ -1104,3 +1146,226 @@ class MandyocBuilder:
     def plot_interfaces(self, fig:plt.Figure, axes:plt.Axes, mode:str='fill'):
 
         return fig, axes
+
+
+
+class VelocityFieldBuilder:
+
+    def __init__(self, scenarioBuilder:MandyocBuilder, units='cm/y'):
+        self.scenario = scenarioBuilder
+
+        self.Nx = scenarioBuilder.Nx
+        self.Nz = scenarioBuilder.Nz
+        self.Lx = scenarioBuilder.Lx
+        self.Lz = scenarioBuilder.Lz
+
+        self.x = scenarioBuilder.x
+        self.z = scenarioBuilder.z
+
+        self.dx = self.x[1] - self.x[0]
+        self.dz = self.z[1] - self.z[0]
+
+        self.boundaries = ['left','right','top','bot']
+        #self.velocs = xr.Dataset(dims=('x','z'),coords={'x':self.x, 'z':self.z})
+
+        baseZ_array = xr.DataArray((np.zeros(self.Nz)),dims=('z'),coords={'z':self.z})
+        baseX_array = xr.DataArray((np.zeros(self.Nx)),dims=('x'),coords={'x':self.x})
+
+        self.velocs = DataTree.from_dict( {'left':xr.Dataset({'vx':baseZ_array,'vz':baseZ_array},coords={'z':self.z}),
+                             'right':xr.Dataset({'vx':baseZ_array,'vz':baseZ_array},coords={'z':self.z}),
+                             'top':xr.Dataset({'vx':baseX_array,'vz':baseX_array},coords={'x':self.x}),
+                             'bot':xr.Dataset({'vx':baseX_array,'vz':baseX_array},coords={'x':self.x})}
+                             )
+        
+
+        if scenarioBuilder.dimensions == 3:
+            self.Ny = scenarioBuilder.Ny
+            self.Ly = scenarioBuilder.Ly 
+            self.y = scenarioBuilder.y
+            self.dy = self.y[1] - self.y[0]
+
+            self.boundaries.append('front')
+            self.boundaries.append('back')
+
+            # The 3D still have to be implemented
+
+        self.units = units
+        scenarioBuilder._print_verbose(f'The velocity builder was created. Velocities have to be in {self.units}')
+
+    def set_region(self, boundary:str, range:list|tuple|np.ndarray, vx=None, vz=None, mode:str='set'):
+
+        mask = self._create_mask(values_range=range, boundary=boundary)
+
+        self._apply_veloc(mask, boundary, vx, vz, mode)
+
+        if vx is None: vx = 0
+        if vx is None: vz = 0
+        self.scenario._print_verbose(f'Constant velocity in the {boundary}: from [{range[0]:.1f},{range[1]:.1f}], vx={vx:.3e}, vz={vz:.3e} {self.units}')
+
+        return self
+
+    def linear_velocity(self, boundary:str, v_component:str, range:list|tuple|np.ndarray=None, 
+                        clims:list|tuple|np.ndarray=None, vlims:list|tuple|np.ndarray=None, 
+                        coef:float=None, b:float=None):
+
+
+        vx = self.velocs[boundary].vx
+        vz = self.velocs[boundary].vz 
+
+        if coef is None: # calculate the slope coeficient
+            coef = (vlims[1]-vlims[0])/(clims[1]-clims[0])
+            
+            if b is None: # the linear constant
+                b = vlims[1] - coef * clims[1]
+
+        else: # user gives the coeficient 
+            if b is None: b = 0.0
+
+
+        varying_coord = self._evaluate_bound(boundary)
+        veloc = coef * varying_coord + b
+
+        self.scenario._print_verbose(f'linear velocity in the {boundary} boundary: {v_component} = {coef:.3e} * COORD + {b:.3e}')
+
+        if v_component == 'vz': 
+            vz = veloc
+        
+        elif v_component == 'vx': 
+            vx = veloc
+        
+        mask = self._create_mask(values_range=range, boundary=boundary)
+
+        self._apply_veloc(mask, boundary, vx, vz, 'set')
+        
+        return self
+
+    def _create_mask(self, values_range, boundary):
+
+        if boundary in ['top','bot']:
+            xmin, xmax = values_range
+            mask = (self.velocs[boundary].x >= xmin) & (self.velocs[boundary].x <= xmax)
+
+        elif boundary in ['left','right']:
+            zmin,zmax = values_range
+            mask = (self.velocs[boundary].z >= zmin) & (self.velocs[boundary].z <= zmax)
+
+        return mask
+
+    def integrate_normal_components(self):
+
+        left_vx = self.velocs['left'].vx.sortby('z')
+        right_vx = self.velocs['right'].vx.sortby('z')
+        top_vz = self.velocs['top'].vz.sortby('x')
+        bot_vz = self.velocs['bot'].vz.sortby('x')
+
+        outflux_l = -left_vx.integrate("z")
+        outflux_r = right_vx.integrate("z")
+
+        outflux_t = top_vz.integrate("x")
+        outflux_b = -bot_vz.integrate("x")
+
+        sum_outflux = outflux_l + outflux_r + outflux_t + outflux_b
+        self.scenario._print_verbose(f"Int V = {sum_outflux.values:.3e}")
+        
+        return sum_outflux
+
+    def conservate_veloc(self,boundary:str='bot', correction_factor:float=1.0):
+
+        v_exc = self.integrate_normal_components()
+        target_flux = -v_exc * correction_factor
+
+        if boundary in ['bot', 'top']:
+            normal = 1 if boundary == 'top' else -1
+            vz_compensation = (target_flux / abs(self.Lx)) * normal
+            
+            ranges = [self.x.min(), self.x.max()]
+            
+            self.scenario._print_verbose(f"Applying compensating Vz = {vz_compensation:.3e} to {boundary}")
+            self.set_region(boundary, ranges, vz=vz_compensation, mode='add')
+        
+
+        elif boundary in ['left', 'right']:
+            normal = 1 if boundary == 'right' else -1
+            vx_compensation = (target_flux / abs(self.Lz)) * normal
+            
+            ranges = [self.z.min(), self.z.max()]
+            
+            self.scenario._print_verbose(f"Applying compensating Vx = {vx_compensation:.3e} to {boundary}")
+            self.set_region(boundary, ranges, vx=vx_compensation, mode='add')
+        
+        return self
+
+    def _evaluate_bound(self,boundary):
+
+        if boundary in ['left', 'right']:
+            varying_coord = self.z
+        elif boundary in ['top', 'bot']:
+            varying_coord = self.x
+        else:
+            raise ValueError(f"Unknown boundary: {boundary}")
+
+        return varying_coord
+
+    def _apply_veloc(self, mask, boundary, vx, vz, mode='set'):
+        if mode not in ['set', 'add']:
+            raise ValueError(f"Invalid mode '{mode}'. Use 'set' or 'add'.")
+
+        if vx is not None:
+            
+            target_vx = self.velocs[boundary]['vx'] + vx if mode == 'add' else vx
+            
+            self.velocs[boundary]['vx'] = xr.where(
+                mask, 
+                target_vx, 
+                self.velocs[boundary]['vx']
+            )
+            
+        if vz is not None:
+            target_vz = self.velocs[boundary]['vz'] + vz if mode == 'add' else vz
+            
+            self.velocs[boundary]['vz'] = xr.where(
+                mask, 
+                target_vz, 
+                self.velocs[boundary]['vz']
+            )
+
+        return self
+
+    def view_veloc(self):
+
+        fig1, axs = plt.subplots(1,2, sharex=True, sharey=True)
+
+        self.velocs.right.vx.plot(y='z',ax=axs[1],label='vx')
+        self.velocs.right.vz.plot(y='z',ax=axs[1],label='vz')
+
+        self.velocs.left.vx.plot(y='z',ax=axs[0],label='vx')
+        self.velocs.left.vz.plot(y='z',ax=axs[0],label='vz')
+        axs[0].set_title('left')
+        axs[1].set_title('right')
+        axs[0].legend()
+        axs[0].set_xlabel('vel.')
+        axs[1].set_xlabel('vel.')
+
+        axs[0].grid()
+        axs[1].grid()
+
+        fig2, axs = plt.subplots(2,1, sharex=True, sharey=True)
+
+        self.velocs.top.vx.plot(x='x',ax=axs[0],label='vx')
+        self.velocs.top.vz.plot(x='x',ax=axs[0],label='vz')
+
+        self.velocs.bot.vx.plot(x='x',ax=axs[1],label='vx')
+        self.velocs.bot.vz.plot(x='x',ax=axs[1],label='vz')
+
+        axs[0].set_title('top')
+        axs[1].set_title('bot')
+        axs[0].legend()
+        axs[1].set_ylabel('vel.')
+        axs[0].set_ylabel('vel.')
+
+        axs[0].grid()
+        axs[1].grid()
+
+        print(f'Integral V = {self.integrate_normal_components().values}')
+
+        return fig1,fig2
