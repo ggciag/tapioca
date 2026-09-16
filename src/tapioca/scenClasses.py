@@ -1687,3 +1687,190 @@ class VelocityFieldBuilder:
         print(f'Int V•dS = {self.integrate_normal_components().values}')
 
         return fig1,fig2
+
+
+class TemperatureFieldBuilder:
+
+    def __init__(self, scenarioBuilder:MandyocBuilder, 
+                 c_cap:float=1250.0,g:float=-10.0,alpha:float=3.28e-5):
+
+
+        self.scenario = scenarioBuilder
+        
+        self.Nx = scenarioBuilder.Nx
+        self.Nz = scenarioBuilder.Nz
+        self.Lx = scenarioBuilder.Lx
+        self.Lz = scenarioBuilder.Lz
+
+        self.x = scenarioBuilder.x
+        self.z = scenarioBuilder.z
+        self.thick_air = scenarioBuilder.thick_air
+
+        self.g = g
+        self.alpha = alpha
+        self.c_cap = c_cap
+        
+        self.rho = scenarioBuilder.DTree.fields.rho
+        self.kappa = scenarioBuilder.DTree.fields.k
+        self.H = scenarioBuilder.DTree.fields.H
+        self.k_cond = self.kappa*self.rho*self.c_cap
+        
+        self.temperature = xr.DataArray(np.zeros((self.Nx,self.Nz),np.float64),dims=('x','z'),
+                                     coords={'x':self.x,'z':self.z})
+        
+        self.temperature.attrs['unit']='deg C'
+        
+        self.z_corr = -(self.temperature.z + self.thick_air)
+        self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
+
+
+    def apply_basic_temperature(self,t_base:float,t_top:float,
+                 lithosphere_thickness:list|tuple,t_pot:float=1350.0,):
+
+        self.t_pot = t_pot
+        self.lithosphere_thickness = lithosphere_thickness
+        self.temperature[:,:] = (t_pot)/lithosphere_thickness * self.ZZ.T
+        temp_adiabatic = t_pot / np.exp(self.g * self.alpha * self.ZZ.T / self.c_cap)
+        
+
+        self.temperature = xr.where(self.temperature<0, 0.0,self.temperature)
+        self.temperature = xr.where(self.temperature>temp_adiabatic,temp_adiabatic,self.temperature)
+
+    def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
+
+        """
+        Solves the 2D transient heat diffusion equation over a specified number of time steps.
+        """
+        import numpy as np
+        
+        # Convert dt from years to seconds to match SI units
+        
+        dt = dt_years * SEC_PER_YEAR
+        num_steps = int(time_max / dt_years)
+
+        # Extract raw numpy arrays from xarray DataArrays for computation speed
+        T = self.temperature.transpose('x', 'z').values
+        kappa = self.kappa.transpose('x', 'z').values
+        H = self.H.transpose('x', 'z').values
+        
+        # Grid spacing
+        dx = abs(self.x[1] - self.x[0])
+        dz = abs(self.z[1] - self.z[0])
+        
+        # Ensure numerical stability (CFL condition)
+        kappa_max = np.max(kappa)
+        dt_max = (dx**2 * dz**2) / (2 * kappa_max * (dx**2 + dz**2))            
+
+        cond = (self.ZZ.T < (self.lithosphere_thickness)) | (T == 0)
+
+        if (dt > dt_max) or (dt_years<=0):
+            
+            # Automatically cap the timestep to the maximum stable limit to prevent explosion
+            dt = dt_max * 0.95
+            num_steps = int((time_max * SEC_PER_YEAR) / dt)
+
+        self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
+        self.scenario._print_verbose(f"{num_steps} steps to run.")
+
+        for step in range(num_steps):
+            T_new = np.copy(T)
+            
+            # 1. First derivatives of Temperature (dT/dx, dT/dz)
+            dT_dx = (T[2:, 1:-1] - T[:-2, 1:-1]) / (2 * dx)
+            dT_dz = (T[1:-1, 2:] - T[1:-1, :-2]) / (2 * dz)
+            
+            # 2. First derivatives of Diffusivity (dK/dx, dK/dz)
+            dK_dx = (kappa[2:, 1:-1] - kappa[:-2, 1:-1]) / (2 * dx)
+            dK_dz = (kappa[1:-1, 2:] - kappa[1:-1, :-2]) / (2 * dz)
+            
+            # 3. Second derivatives of Temperature (d2T/dx2, d2T/dz2)
+            d2T_dx2 = (T[2:, 1:-1] - 2 * T[1:-1, 1:-1] + T[:-2, 1:-1]) / (dx**2)
+            d2T_dz2 = (T[1:-1, 2:] - 2 * T[1:-1, 1:-1] + T[1:-1, :-2]) / (dz**2)
+            
+            # 4. Assemble the full diffusion terms
+            diffusion_x = kappa[1:-1, 1:-1] * d2T_dx2 + dK_dx * dT_dx
+            diffusion_z = kappa[1:-1, 1:-1] * d2T_dz2 + dK_dz * dT_dz
+            
+            # 5. Forward Euler update
+            T_new[1:-1, 1:-1] = T[1:-1, 1:-1] + dt * (diffusion_x + diffusion_z + H[1:-1, 1:-1] / self.c_cap)
+            
+            # 6. Apply Boundary Conditions
+            # Zero heat flux on lateral boundaries
+            T_new[0, :] = T_new[1, :]    
+            T_new[-1, :] = T_new[-2, :]  
+            
+            # Assuming fixed temperatures at the top and bottom bounds
+            T_new[:, 0] = T[:, 0]
+            T_new[:, -1] = T[:, -1]
+            
+            T = xr.where(cond, T, T_new)
+
+        # Push updated values back to the DataArray
+        if self.temperature.dims == ('z', 'x'):
+            self.temperature.values = T.T
+        else:
+            self.temperature.values = T
+
+
+    def solve_heat_diffusion1D(self, time_max: float, dt_years: float=0.0, x_inx:int=0):
+        """
+        Solves the 1D transient heat diffusion equation on a single vertical column
+        and replicates the resulting profile across the entire 2D domain.
+        """
+        
+        dt = dt_years * SEC_PER_YEAR
+        num_steps = int(time_max / dt_years)
+        print(f"Running {num_steps} iterations for 1D profile...")
+        
+        # 1. Extract 1D profiles (using the first column at x=0)
+        # We use .isel() to safely slice the xarray without assuming axis order
+        T_1d = self.temperature.isel(x=x_inx).values.copy()
+        kappa_1d = self.kappa.isel(x=x_inx).values.copy()
+        H_1d = self.H.isel(x=x_inx).values.copy()
+
+        cond = (self.z_corr < (self.lithosphere_thickness)) | (T_1d == 0)
+
+        dz = abs(self.z[1] - self.z[0])
+        
+        # 2. CFL Condition (1D limit is less restrictive than 2D)
+        kappa_max = np.max(kappa_1d)
+        dt_max = (dz**2) / (2 * kappa_max)
+        
+        if dt > dt_max:
+            print(f"Warning: Input dt exceeds 1D stable limit ({dt_max/SEC_PER_YEAR:.2e} yrs).")
+            dt = dt_max * 0.99
+            num_steps = int((time_max * SEC_PER_YEAR) / dt)
+            
+        # 3. 1D Finite Difference Loop
+        for step in range(num_steps):
+            T_new = np.copy(T_1d)
+            
+            # Derivatives along the Z-axis
+            dT_dz = (T_1d[2:] - T_1d[:-2]) / (2 * dz)
+            dK_dz = (kappa_1d[2:] - kappa_1d[:-2]) / (2 * dz)
+            d2T_dz2 = (T_1d[2:] - 2 * T_1d[1:-1] + T_1d[:-2]) / (dz**2)
+            
+            # Diffusion term
+            diffusion_z = kappa_1d[1:-1] * d2T_dz2 + dK_dz * dT_dz
+            
+            # Forward Euler update
+            T_new[1:-1] = T_1d[1:-1] + dt * (diffusion_z + H_1d[1:-1] / self.c_cap)
+            
+            # Boundary Conditions (Dirichlet: Fixed temperatures at top and bottom)
+            T_new[0] = T_1d[0]
+            T_new[-1] = T_1d[-1]
+            
+            T_1d = xr.where(cond, T_1d, T_new)
+            
+        # 4. Replicate and map back to 2D
+        nx = len(self.x)
+        
+        # Verify the dimensions of the host DataArray to broadcast correctly
+        if self.temperature.dims == ('z', 'x'):
+            # Tile T_1d into columns: shape becomes (nz, nx)
+            T_2d = np.tile(T_1d[:, np.newaxis], (1, nx))
+        else:
+            # Tile T_1d into rows: shape becomes (nx, nz)
+            T_2d = np.tile(T_1d, (nx, 1))
+            
+        self.temperature.values = T_2d
