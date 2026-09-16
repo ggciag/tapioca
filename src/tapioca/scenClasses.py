@@ -10,7 +10,7 @@ import xarray as xr
 from xarray import DataTree
 
 from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from ._aux_functions import read_params
+from ._aux_functions import read_params, ensure_directory_exists
 
 #Mandyoc Scenario class
 class MandyocScen:
@@ -693,7 +693,7 @@ class MandyocBuilder:
 
         Parameters
         ----------
-        path : str
+        path : str or Path
             The absolute or relative directory path where the generated scenario files will be exported.
         
         Nx : int
@@ -775,6 +775,7 @@ class MandyocBuilder:
         self.path = path
         self.verbose = verbose
         self.thick_air = thick_air
+        ensure_directory_exists(self.path)
 
         self.Nx = Nx
         self.Nz = Nz
@@ -942,12 +943,12 @@ class MandyocBuilder:
         # checking where the null line position
         if intersection_line == 'top':
             z_ref = zmax
-        elif intersection_line == 'bottom':
+        elif intersection_line == 'bot':
             z_ref = zmin
         elif intersection_line == 'mid':
             z_ref = mid_z
         else:
-            raise ValueError("The position for the intersection line must be: `top`, `bottom` or `mid`.")
+            raise ValueError("The position for the intersection line must be: `top`, `bot` or `mid`.")
 
         self._print_verbose(f'Polygon bounds: ({xmin,zmin}) ({xmax,zmax})')
         self._print_verbose(f'Intersection line ({intersection_line} line) is at {z_ref} m depth')
@@ -1122,7 +1123,8 @@ class MandyocBuilder:
     def create_velocity_field(self, velocbuilder:VelocityFieldBuilder=None, 
                                   vxconst:float=0,vzconst:float=0):
         '''
-        Gets the `VelocityFieldBuilder` class to create the vx and vz fields within the scenario DataTree. Constant values of `vx` and `vz` can be given.
+        Gets the `VelocityFieldBuilder` class to create the vx and vz fields within the scenario DataTree. Constant values of `vx` and `vz` can be given. 
+        This function automatically converts cm/y to m/s.
 
         Parameters
         ----------
@@ -1239,7 +1241,7 @@ class MandyocBuilder:
 
         max_seq += 3
         print(max_seq)
-        with open("interfaces.txt", "w") as f:
+        with open(f"{self.path}interfaces.txt", "w") as f:
             for line in base_text.split("\n")[:-1]:
                 all_seqs = line.strip().split('  ')
                 f.write(all_seqs[0].ljust(21)) # 21 spaces -> len of "friction_angle_***   "
@@ -1267,6 +1269,47 @@ class MandyocBuilder:
             df.set_index('name').T.to_csv(csv_path, sep=';')
             
         return True
+
+    def export_field(self,field:str,header:str=''):
+        '''
+        Function to export fields in the mandyoc required format.
+        For the velocity or temperature field, this function exports the field with the appropriates name.
+
+        Parameters
+        ----------
+        field:str
+            Field to be exported. The special fields are (`velocity`,`temperature`)
+        header:str, optional
+            Comments in the header of the file. Default is ''.
+        '''
+        name=field
+        if len(header)==0: header='v1\nv2\nv3\nv4'
+        
+        if field == 'velocity':    
+            vx = self.DTree.fields.vx
+            vz = self.DTree.fields.vz
+
+            vvx = vx.values.reshape(self.Nx*self.Nz)
+            vvz = vz.values.reshape(self.Nx*self.Nz)
+
+            velocity_export = np.zeros((2, self.Nx * self.Nz))
+            velocity_export[0,:] = vvx
+            velocity_export[1,:] = vvz
+
+            data_export = np.reshape(velocity_export.T, (np.size(velocity_export)))
+            name = 'input_velocity_0'
+
+        else:
+            data = self.DTree.fields[field]
+            data_export = np.reshape(data, (self.Nx * self.Nz))
+            
+            if field=='temperature':
+                name='input_temperature_0'
+
+        self._print_verbose(f'Exporting velocity field ({len(data_export)})')
+        np.savetxt(f"{self.path}{name}.txt", data_export, header=header)
+
+        return self
     
     def set_params(self, params_str:str='', **kwargs):
         """
