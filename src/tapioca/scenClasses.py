@@ -683,37 +683,95 @@ class MandyocBuilder:
             Ny:int=0, Ly:float=0.0, thick_air:float=40e3, 
             verbose:bool=True):
         """
-        Class to facilitate the creation of Mandyoc scenarios.
+        A builder class made to generate, manage, and export initial setups 
+        for Mandyoc geodynamic models. 
+        
+        It utilizes xarray's DataTree structure to strictly separate 
+        1D geometric boundaries (interfaces) and 2D/3D material properties (fields). 
+        By default, it assumes a Cartesian coordinate system where the Z-axis is negative 
+        downwards (from the bottom of the model at -Lz up to 0). 
 
         Parameters
         ----------
-
         path : str
-
-        Nx : int
-
-        Nz : int
-
-        Lx : float
-
-        Lz : float
-
-        Ny : int, optional
-
-            Default is 0.
-
-        Ly : float, optional
-
-            Default is 0.0.
-
-        thick_air : float, optional
-
-            Default is 40e3.
+            The absolute or relative directory path where the generated scenario files will be exported.
         
+        Nx : int
+            The number of numerical nodes along the X-axis (horizontal).
+            
+        Nz : int
+            The number of numerical nodes along the Z-axis (vertical/depth).
+            
+        Lx : float
+            The total length of the model domain along the X-axis (in meters).
+            
+        Lz : float
+            The total depth of the model domain (in meters). 
+            Note: The class automatically converts this to a negative value internally to represent depth below the surface.
+            
+        Ny : int, optional
+            The number of numerical nodes along the Y-axis. Required only for 3D scenarios. 
+            Default is 0.
+            
+        Ly : float, optional
+            The total physical length of the model domain along the Y-axis in meters. 
+            Required only for 3D scenarios. 
+            Default is 0.0.
+            
+        thick_air : float, optional
+            The thickness of the sticky air layer at the top of the model domain (in meters). 
+            Default is 40000.0 (40 km).
+            
         verbose : bool, optional
-
+            If True, the builder will print status updates and configuration details to the console during functions execution. 
             Default is True.
-        """
+
+        Attributes
+        ----------
+        path : str
+            The output directory path.
+            
+        verbose : bool
+            The current verbosity state of the builder.
+            
+        thick_air : float
+            The defined thickness of the sticky air layer.
+            
+        Nx, Nz, Ny : int
+            The node counts for the X, Z, and Y axes, respectively. 
+            `Ny` remains None if the model is 2D.
+            
+        Lx, Lz, Ly : float
+            The physical dimensions of the grid. `Lz` is strictly negative. 
+            `Ly` remains None if the model is 2D.
+            
+        dimensions : int
+            The spatial dimensionality of the model (either 2 or 3), determined automatically 
+            based on the provided `Ny` and `Ly` parameters.
+            
+        x : numpy.ndarray
+            A 1D array of length `Nx` containing the spatial coordinates along the X-axis 
+            (from 0 to `Lx`).
+            
+        z : numpy.ndarray
+            A 1D array of length `Nz` containing the spatial coordinates along the Z-axis 
+            (from `Lz` to 0).
+            
+        y : numpy.ndarray or None
+            A 1D array of length `Ny` containing the spatial coordinates along the Y-axis 
+            (from 0 to `Ly`). None if the model is 2D.
+            
+        DTree : xarray.DataTree
+            The core hierarchical data structure storing the model's geometry and physics. 
+            It contains two main groups:
+            * `/interfaces`: An `xarray.Dataset` storing the 1D (or 2D if the model is 3D) 
+            depth arrays defining the boundaries between different geological layers. 
+            Contains material parameters in the datarrays attributes.
+            * `/fields`: An `xarray.Dataset` storing the fully 2D (or 3D) grids containing 
+            the final material properties (e.g., density, radiogenic heat) in the discrete
+            numerical nodes. It can also contain the input variables (vx, vz, temperature).
+            """
+        
         self.path = path
         self.verbose = verbose
         self.thick_air = thick_air
@@ -777,6 +835,30 @@ class MandyocBuilder:
         return None
 
     def create_interface(self, id_layer:int, position:float|np.ndarray, interface_name:str=None, **material):
+        '''
+        Create a structural interface and assign its geometric position and material properties.
+
+        This function creates an interface DataArray and adds it to the model's DataTree. It supports both 2D and 3D dimensions. 
+        Note that an ID of -1 is treated as a special uppermost bounding layer (e.g., air); its coordinates are forced to 0 regardless of the position input.
+        
+        Parameters
+        ----------
+        id_layer: int
+            The integer identifier for the layer. Use -1 to specify the uppermost layer of the model.
+        
+        position: float or np.ndarray
+            The depth position of the interface. This can be a constant float representing a flat depth, or an array defining a complex surface.
+        
+        interface_name: str, optional
+            The name assigned to the interface in the dataset. If not provided, it automatically defaults to `interface_{id_layer}`.
+
+            Default is None.
+
+        **material
+            Rheological and thermal parameters for the layer. These inputs overwrite the properties in DEFAULT_MATERIAL. 
+            A density value ('rho') must be explicitly provided or the function will raise a ValueError.
+        
+        '''
 
         if interface_name==None:
             interface_name = f'interface_{id_layer}'
@@ -822,7 +904,35 @@ class MandyocBuilder:
 
 
     def add_interface_from_shapely(self, layer:str, polygon:Polygon, poly_name:str=None, intersection_line:str='mid', **material): # 2D
+        '''
+        Add interfaces from a defined convex polygon. The user must specify the layer in which the polygon will be contained.
 
+        This function creates the interfaces DataArray and adds it to the model's DataTree. 
+        Note that this function creates two interfaces: top and bottom of the polygon. The IDs are automatically corrected using the specified layer.
+        The top interface receives the material within the polygon, while the bottom interface receives the parameters from the outer layer.
+        
+        Parameters
+        ----------
+        layer: str
+            The name of the layer that will receive/contain the given polygon.
+        
+        polygon: shapely.Polygon
+            The Polygon object created with shapely. The polygon has to be convex and with no negative features in x direction. 
+        
+        poly_name: str, optional
+            The name for the polygon interfaces.
+
+            Default is None.
+        
+        intersection_line: str, optional
+            The relative position of the interface line in the polygon. Possible values are 'mid', 'top', 'bot'.
+
+            Default is 'mid'.
+
+        **material
+            Rheological and thermal parameters within the polygon.
+        
+        '''
         polycoords = to_ragged_array([polygon])[1]
         polyxcoords = np.unique(polycoords[:,0])
 
@@ -895,8 +1005,8 @@ class MandyocBuilder:
 
     def _evaluate_interface_position(self, coord):
         """
-        internal method to verify what type of coordinate or position the interface
-        is recieving 
+        Internal method to verify what type of coordinate or position the interfaces function
+        is recieving
         """
 
         if isinstance(coord,float) or isinstance(coord,int):
@@ -938,9 +1048,16 @@ class MandyocBuilder:
 
     def create_materials_fields(self):
         """
-        Internal method to create fields with the material parameters, according to the interfaces already created.
+        Turns interfaces into 2D (or 3D) material fields.
 
-        This method sorts all interfaces by their ID. Bear in mind that the top layer must have the ID of -1, and the bottom layer must have the ID of 0.
+        This method iterates through all defined material parameters (e.g., density, radiogenic heat) 
+        and constructs corresponding spatial fields in the `DataTree`.
+
+        The interfaces are automatically sorted by their `id` attribute before field generation. 
+        The method handles two special boundary IDs to bound the top and bottom of the model:
+        * ID `-1`: Represents the uppermost layer (e.g., sticky air). It fills all grid nodes 
+          above the highest interface.
+        * ID `0`: Represents the lowermost basal layer. It fills all grid nodes below the deepest interface.
         """
         #create the xdataarray fields with interfaces params 
 
@@ -1004,6 +1121,24 @@ class MandyocBuilder:
 
     def create_velocity_field(self, velocbuilder:VelocityFieldBuilder=None, 
                                   vxconst:float=0,vzconst:float=0):
+        '''
+        Gets the `VelocityFieldBuilder` class to create the vx and vz fields within the scenario DataTree. Constant values of `vx` and `vz` can be given.
+
+        Parameters
+        ----------
+        velocbuilder:VelocityFieldBuilder
+            The previous setup of the velocity field in the boundaries. It must be already treated to avoid divergences.
+        
+        vx:float, optional
+            Value for the vx if velocbuilder is not gave.
+
+            Default is 0.
+        
+        vz:float, optional
+            Value for the vz if velocbuilder is not gave.
+
+            Default is 0.
+        '''
     
         vx = xr.DataArray(
                         np.ones((self.Nx, self.Nz))*vxconst, 
@@ -1046,7 +1181,7 @@ class MandyocBuilder:
 
     def export_interfaces(self, export:str='dataset'):
         '''
-        Export the interfaces created into the "interfaces.txt" file required by Mandyoc.
+        Export the created interfaces into the "interfaces.txt" file required in Mandyoc.
 
         Parameters
         ----------
@@ -1152,6 +1287,45 @@ class MandyocBuilder:
 class VelocityFieldBuilder:
 
     def __init__(self, scenarioBuilder:MandyocBuilder, units='cm/y'):
+        '''
+        Class to build a correctly and conservative velocity field for a mandyoc scenario.
+        
+        The basic workflow of this class is:
+        (1) Initialize the VelocityFieldBuilder with your current scenario;
+        (2) Set velocities using `set_region` or `linear_velocity` functions;
+        (3) Check the field conservation using the function `integrate_normal_components`;
+        (4) Apply the velocity correction using the function `conservate_veloc`. Maybe you should to iterate this step until to reach a tolerance divergence.
+        (5) Brief visualize the velocities with `view_veloc`.
+
+        Parameters
+        ----------
+
+        scenarioBuilder: MandyocBuilder
+            The scenario that will recieve the velocity field. The VelocityFieldBuilder will get all parameters and attributes from the scenario class.
+        
+        units: str, optional
+            The units of the velocity field. It must be 'cm/y' or 'm/s'.
+
+            Default is 'cm/y'.
+
+        Attributes
+        ----------
+        scenario: MandyocBuilder
+        Nx: int
+        Nz: int
+        Lx: float
+        Lz: float
+        x: numpy.ndarray
+        z: numpy.ndarray
+        boundaries: list
+        velocs: xarray.DataTree
+        units: str
+
+        Ny: int
+        Ly: float
+        y: numpy.ndarray
+
+        '''
         self.scenario = scenarioBuilder
 
         self.Nx = scenarioBuilder.Nx
@@ -1193,7 +1367,32 @@ class VelocityFieldBuilder:
         scenarioBuilder._print_verbose(f'The velocity builder was created. Velocities have to be in {self.units}')
 
     def set_region(self, boundary:str, range:list|tuple|np.ndarray, vx=None, vz=None, mode:str='set'):
+        '''
+        This function set or add a constant velocity in a region of the selected boundary.
 
+        Parameters
+        ----------
+        boundary: str
+            The boundary that you recieve the imposed velocity ('top','bot','left','right).
+
+        range: list|tuple|np.ndarray
+            The min and max values on the given boundary, such as [XMIN,XMAX] or [ZMIN,ZMAX].
+
+        vx: float, optional
+            The velocity in the Vx component.
+
+            Default is None.
+
+        vz: float, optional
+            The velocity in the Vz component.
+
+            Default is None.
+        
+        mode: str, optional
+            The mode that the velocity will be applied: 'add' or 'set'.
+            
+            Default is 'set'.
+        '''
         mask = self._create_mask(values_range=range, boundary=boundary)
 
         self._apply_veloc(mask, boundary, vx, vz, mode)
@@ -1206,8 +1405,50 @@ class VelocityFieldBuilder:
 
     def linear_velocity(self, boundary:str, v_component:str, range:list|tuple|np.ndarray=None, 
                         clims:list|tuple|np.ndarray=None, vlims:list|tuple|np.ndarray=None, 
-                        coef:float=None, b:float=None):
+                        coef:float=None, b:float=None, mode:str='set'):
+        '''
+        This function apply a linear velocity function in a range of the selected boundary.
+        
+        V = a * COORD + b
 
+        The user can give the limits and the velocities to calculate `a` and `b` or give these parameters directly.  
+
+        Parameters
+        ----------
+        boundary: str
+            The boundary that you recieve the imposed velocity ('top','bot','left','right).
+
+        v_component: str
+            Which velocity component are being set ('vx' or 'vz').
+            
+        range: list|tuple|numpy.ndarray
+            The min and max values on the given boundary to apply the velocities, such as [XMIN,XMAX] or [ZMIN,ZMAX].
+
+        clims: list|tuple|numpy.ndarray, optional
+            The min and max values in the coordinate to calculate the line slope, such as [XMIN,XMAX] or [ZMIN,ZMAX]. If None, `coef` and `b` must be given. 
+
+            Default is None.
+
+        vlims: list|tuple|numpy.ndarray, optional
+            The velocity values in the coordinates given in `clims`. If None, `coef` and `b` must be given. 
+
+            Default is None.
+        
+        coef: float, optional
+            The slope of the function. 
+
+            Default is None.
+
+        b: float, optional
+            The constant of the function. 
+
+            Default is None.
+
+        mode: str, optional
+            The mode that the velocity will be applied: 'add' or 'set'.
+            
+            Default is 'set'.
+        '''
 
         vx = self.velocs[boundary].vx
         vz = self.velocs[boundary].vz 
@@ -1235,11 +1476,14 @@ class VelocityFieldBuilder:
         
         mask = self._create_mask(values_range=range, boundary=boundary)
 
-        self._apply_veloc(mask, boundary, vx, vz, 'set')
+        self._apply_veloc(mask, boundary, vx, vz, mode)
         
         return self
 
     def _create_mask(self, values_range, boundary):
+        ''' 
+        Internal method to get the masked interval
+        '''
 
         if boundary in ['top','bot']:
             xmin, xmax = values_range
@@ -1252,6 +1496,14 @@ class VelocityFieldBuilder:
         return mask
 
     def integrate_normal_components(self):
+        '''
+        Gives outflux integration (of the normal components) of the velocity field by:
+
+            Int V•n dS = [ Int Vx(x=Lx) dz - Int Vx(x=0) dz ] + [Int Vz(0) dx - Int Vz(Lz) dx ]
+
+        returns: float
+            Return the outflux.
+        '''
 
         left_vx = self.velocs['left'].vx.sortby('z')
         right_vx = self.velocs['right'].vx.sortby('z')
@@ -1270,6 +1522,19 @@ class VelocityFieldBuilder:
         return sum_outflux
 
     def conservate_veloc(self,boundary:str='bot', correction_factor:float=1.0):
+        '''
+        Apply the divergence of the velocity field, or a fraction of it, field into a whole boundary. 
+
+        Parameters
+        ----------
+        boundary: str
+            The boundary that you recieve the imposed velocity ('top','bot','left','right).
+        
+        correction_factor: float
+            The fraction of correction to be applied. Should be: 0.0 < CF <= 1.0.
+
+            Default is 1.0.
+        '''
 
         v_exc = self.integrate_normal_components()
         target_flux = -v_exc * correction_factor
@@ -1296,7 +1561,9 @@ class VelocityFieldBuilder:
         return self
 
     def _evaluate_bound(self,boundary):
-
+        '''
+        Internal method to evaluate which coordinates (x or z) must to be used
+        '''
         if boundary in ['left', 'right']:
             varying_coord = self.z
         elif boundary in ['top', 'bot']:
@@ -1307,6 +1574,9 @@ class VelocityFieldBuilder:
         return varying_coord
 
     def _apply_veloc(self, mask, boundary, vx, vz, mode='set'):
+        '''
+        Internal method to apply the velocity into a range, using a mask and a mode.
+        '''
         if mode not in ['set', 'add']:
             raise ValueError(f"Invalid mode '{mode}'. Use 'set' or 'add'.")
 
@@ -1332,40 +1602,45 @@ class VelocityFieldBuilder:
         return self
 
     def view_veloc(self):
+        '''
+        Function to plot the velocities in the boundaries.
+        The first figure represents the left and right, and the second the top and bot boundaries. 
 
-        fig1, axs = plt.subplots(1,2, sharex=True, sharey=True)
+        returns: (plt.Figure, plt.Figure)
+        '''
+        fig1, axslr = plt.subplots(1,2, sharex=True, sharey=True)
 
-        self.velocs.right.vx.plot(y='z',ax=axs[1],label='vx')
-        self.velocs.right.vz.plot(y='z',ax=axs[1],label='vz')
+        self.velocs.right.vx.plot(y='z',ax=axslr[1],label='vx')
+        self.velocs.right.vz.plot(y='z',ax=axslr[1],label='vz')
 
-        self.velocs.left.vx.plot(y='z',ax=axs[0],label='vx')
-        self.velocs.left.vz.plot(y='z',ax=axs[0],label='vz')
-        axs[0].set_title('left')
-        axs[1].set_title('right')
-        axs[0].legend()
-        axs[0].set_xlabel('vel.')
-        axs[1].set_xlabel('vel.')
+        self.velocs.left.vx.plot(y='z',ax=axslr[0],label='vx')
+        self.velocs.left.vz.plot(y='z',ax=axslr[0],label='vz')
+        axslr[0].set_title('left')
+        axslr[1].set_title('right')
+        axslr[0].legend()
+        axslr[0].set_xlabel('vel.')
+        axslr[1].set_xlabel('vel.')
 
-        axs[0].grid()
-        axs[1].grid()
+        axslr[0].grid()
+        axslr[1].grid()
 
-        fig2, axs = plt.subplots(2,1, sharex=True, sharey=True)
+        fig2, axstb = plt.subplots(2,1, sharex=True, sharey=True)
 
-        self.velocs.top.vx.plot(x='x',ax=axs[0],label='vx')
-        self.velocs.top.vz.plot(x='x',ax=axs[0],label='vz')
+        self.velocs.top.vx.plot(x='x',ax=axstb[0],label='vx')
+        self.velocs.top.vz.plot(x='x',ax=axstb[0],label='vz')
 
-        self.velocs.bot.vx.plot(x='x',ax=axs[1],label='vx')
-        self.velocs.bot.vz.plot(x='x',ax=axs[1],label='vz')
+        self.velocs.bot.vx.plot(x='x',ax=axstb[1],label='vx')
+        self.velocs.bot.vz.plot(x='x',ax=axstb[1],label='vz')
 
-        axs[0].set_title('top')
-        axs[1].set_title('bot')
-        axs[0].legend()
-        axs[1].set_ylabel('vel.')
-        axs[0].set_ylabel('vel.')
+        axstb[0].set_title('top')
+        axstb[1].set_title('bot')
+        axstb[0].legend()
+        axstb[1].set_ylabel('vel.')
+        axstb[0].set_ylabel('vel.')
 
-        axs[0].grid()
-        axs[1].grid()
+        axstb[0].grid()
+        axstb[1].grid()
 
-        print(f'Integral V = {self.integrate_normal_components().values}')
+        print(f'Int V•dS = {self.integrate_normal_components().values}')
 
         return fig1,fig2
