@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS
 
-__all__ = ["read_params","read_data"]
+__all__ = ["read_params","read_data","ensure_directory_exists"]
 
 # Old functions, mostly made to handle the old format of data management
 # Could be useful for people using older versions of Mandyoc
@@ -103,7 +103,23 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
         vy = np.reshape(data[1::2], (Nx,Nz), order='F')
         data = (vx.T, vy.T)
     return data
-        
+
+def ensure_directory_exists(folder_path: str|Path):
+    """
+    Checks if a directory path exists and creates it if it does not. 
+    Returns True if succeed. 
+
+    Parameters
+    ----------
+    folder_path : str or pathlib.Path
+        The path of the directory to check and create.
+
+    """
+    path = Path(folder_path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    return True
+
 #====== OLD/DEPRECATED FUNCTIONS ======
 
 def _old_get_rank(cdir:str) -> int:

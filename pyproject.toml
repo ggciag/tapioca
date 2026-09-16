@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tapioca-mandyoc"  
-version = "0.1.0"
+version = "0.2.2"
 description = "Output management and post-processing for Mandyoc geodynamic models based on xarray and DataTrees."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -12,8 +12,6 @@ license = {file = "LICENSE"}
 
 authors = [
   {name = "João Bueno", email = "jbueno@usp.br"},
-  {name = "João Pedro  M. Silva", email="joao.macedo.silva@usp.br" },
-  {name = "Rafael M. Silva", email = "rafael.m.silva@alumni.usp.br"},
 ]
 
 classifiers = [
