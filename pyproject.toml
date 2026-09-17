@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tapioca-mandyoc"  
-version = "0.2.2"
+version = "0.5.0"
 description = "Output management and post-processing for Mandyoc geodynamic models based on xarray and DataTrees."
 readme = "README.md"
 requires-python = ">=3.9"

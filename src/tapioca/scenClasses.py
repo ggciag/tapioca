@@ -1199,6 +1199,8 @@ class MandyocBuilder:
 
 
         temp[:] = tempbuilder.temperature
+        
+        self.DTree.fields['temperature'] = temp
         self.DTree.fields['temperature'].attrs['unit'] = 'deg C'
         self.DTree.fields['temperature'].attrs['t_potential'] = tempbuilder.t_pot
 
@@ -1326,7 +1328,7 @@ class MandyocBuilder:
 
         else:
             data = self.DTree.fields[field]
-            data_export = np.reshape(data, (self.Nx * self.Nz))
+            data_export = np.reshape(data.values, (self.Nx * self.Nz))
             
             if field=='temperature':
                 name='input_temperature_0'
@@ -1715,9 +1717,69 @@ class VelocityFieldBuilder:
 
 
 class TemperatureFieldBuilder:
+    
     '''
-    Class to facilitate the construction of temperature field for mandyoc scenarios.
+    Constructs the 2D thermal field for Mandyoc scenarios, using the created spatial grid and material data structures.
+
+    Parameters
+    ----------
+    scenarioBuilder: MandyocBuilder
+        The primary scenario instance containing grid geometry and pre-populated material property fields.
+
+    c_cap: float, optional
+        Specific heat capacity (in J/(kg K)). Defaults to 1250.0.
+
+    g: float, optional
+        Gravitational acceleration (in m2/s). 
+        Default is -10.0.
+
+    alpha: float, optional
+        Volumetric thermal expansion coefficient (in K^-1). 
+        Default is 3.28e-5.
+
+    Attributes
+    ----------
+
+    scenario: MandyocBuilder
+        Reference pointer to the parent scenario builder.
+
+    Nx, Nz: int
+        Number of computational nodes in the x (horizontal) and z (vertical) directions.
+
+    Lx, Lz: float
+        Total physical dimensions of the domain along the x and z axes.
+
+    x, z: array-like
+        1D spatial coordinate arrays.
+
+    thick_air: float
+        Vertical thickness of the upper sticky air boundary layer.
+
+    g, alpha, c_cap: float 
+        Stored physical constants governing thermomechanical behavior.
+
+    rho: xarray.DataArray 
+        2D spatial density field mapped from the scenario tree.
+
+    kappa: xarray.DataArray
+        2D spatial thermal diffusivity field mapped from the scenario tree.
+
+    H: xarray.DataArray 
+        2D spatial radiogenic heat production field mapped from the scenario tree.
+
+    k_cond: xarray.DataArray 
+        2D thermal conductivity field, automatically computed upon initialization as the product of kappa, rho, and c_cap.
+
+    temperature: xarray.DataArray 
+        2D thermal field array of shape (Nx, Nz) initialized to 0.0. Coordinates are mapped to x and z, with internal attributes explicitly defining units as 'deg C'.
+
+    z_corr: xarray.DataArray
+        Vertical coordinates vertically offset by the sticky air thickness (z + thick_air) to evaluate true structural depth from the geological surface.
+
+    XX, ZZ (numpy.ndarray)
+        2D spatial coordinate meshgrids generated from x and z_corr. Used for fast vectorized matrix masking, boolean logic, and depth-dependent numerical conditions.
     '''
+
     def __init__(self, scenarioBuilder:MandyocBuilder, 
                  c_cap:float=1250.0,g:float=-10.0,alpha:float=3.28e-5):
 
@@ -1751,8 +1813,22 @@ class TemperatureFieldBuilder:
         self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
 
 
-    def apply_basic_temperature(self, lithosphere_thickness:list|tuple,t_pot:float=1350.0,):
+    def apply_basic_temperature(self, lithosphere_thickness:float,t_pot:float=1350.0,):
+        '''
+        This function initiate the temperature field combining a linear gradient within the lithosphere and an adiabatic gradient in the mantle.
 
+        Future implementations: make it for each column based on the interface names instead assuming a constant lithosphere.
+
+        Parameters
+        ----------
+        lithosphere_thickness: float
+            The vertical thickness of the lithosphere used to calculate the initial linear thermal gradient.
+
+        t_pot: float, optional
+            The potential temperature of the asthenosphere/mantle boundary.
+            
+            Default is 1350.0.
+        '''
         self.t_pot = t_pot
         self.lithosphere_thickness = lithosphere_thickness
         self.temperature[:,:] = (t_pot)/lithosphere_thickness * -self.ZZ.T
@@ -1763,11 +1839,23 @@ class TemperatureFieldBuilder:
         self.temperature = xr.where(self.temperature>temp_adiabatic,temp_adiabatic,self.temperature)
 
     def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
+        '''
+        This function solves the 2D transient heat diffusion equation over a specified maximum 
+        time, using a Numba-optimized finite difference loop.
 
-        """
-        Solves the 2D transient heat diffusion equation over a specified number of time steps.
-        It is very slow for medium-fine resolutions. Need improvements.
-        """
+        This function is very slow for medium-fine grids, it still need improvements.
+
+        Parameters
+        ----------
+        time_max: float
+            The total simulation time in years for the heat diffusion process.
+
+        dt_years: float, optional
+            The time step size in years. If it is 0.0 or exceeds the numerical stability 
+            (CFL) limit, the function will automatically cap it to a stable maximum.
+            
+            Default is 0.0.
+        '''
         import numpy as np
         
         # Convert dt from years to seconds to match SI units
@@ -1811,10 +1899,27 @@ class TemperatureFieldBuilder:
 
 
     def solve_heat_diffusion1D(self, time_max: float, dt_years: float=0.0, x_inx:int=0):
-        """
-        Solves the 1D transient heat diffusion equation on a single vertical column
-        and replicates the resulting profile across the entire 2D domain.
-        """
+        '''
+        This function solves the 1D transient heat diffusion equation on a single vertical 
+        column and replicates the resulting thermal profile across the entire 2D domain.
+
+        Parameters
+        ----------
+        time_max: float
+            The total simulation time in years for the 1D heat diffusion process.
+
+        dt_years: float, optional
+            The time step size in years. If it is 0.0 or exceeds the numerical stability limit, 
+            the function will automatically compute and apply a stable time step.
+            
+            Default is 0.0.
+
+        x_inx: int, optional
+            The index along the x-axis from which the 1D vertical column is extracted 
+            for the calculation.
+            
+            Default is 0.
+        '''
         
         dt = dt_years * SEC_PER_YEAR
         num_steps = int(time_max / dt_years)
