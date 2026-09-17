@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS
 
-__all__ = ["read_params","read_data","ensure_directory_exists"]
+__all__ = ["read_params","read_data","ensure_directory_exists","_numba_diffusion_loop"]
 
 # Old functions, mostly made to handle the old format of data management
 # Could be useful for people using older versions of Mandyoc
@@ -119,6 +119,42 @@ def ensure_directory_exists(folder_path: str|Path):
     path.mkdir(parents=True, exist_ok=True)
 
     return True
+
+
+from numba import njit
+@njit(fastmath=True)
+def _numba_diffusion_loop(T, kappa, H, c_cap, dx, dz, dt, num_steps, cond):
+    """JIT-compiled loop for performance gains
+    It is a function to iterate the Euler Foward Approach in the heat diffusion equation.
+    """
+    for step in range(num_steps):
+        T_old = np.copy(T)
+        T_new = np.copy(T)
+        
+        dT_dx = (T[2:, 1:-1] - T[:-2, 1:-1]) / (2.0 * dx)
+        dT_dz = (T[1:-1, 2:] - T[1:-1, :-2]) / (2.0 * dz)
+        
+        dK_dx = (kappa[2:, 1:-1] - kappa[:-2, 1:-1]) / (2.0 * dx)
+        dK_dz = (kappa[1:-1, 2:] - kappa[1:-1, :-2]) / (2.0 * dz)
+        
+        d2T_dx2 = (T[2:, 1:-1] - 2.0 * T[1:-1, 1:-1] + T[:-2, 1:-1]) / (dx**2)
+        d2T_dz2 = (T[1:-1, 2:] - 2.0 * T[1:-1, 1:-1] + T[1:-1, :-2]) / (dz**2)
+        
+        diffusion_x = kappa[1:-1, 1:-1] * d2T_dx2 + dK_dx * dT_dx
+        diffusion_z = kappa[1:-1, 1:-1] * d2T_dz2 + dK_dz * dT_dz
+        
+        T_new[1:-1, 1:-1] = T[1:-1, 1:-1] + dt * (diffusion_x + diffusion_z + H[1:-1, 1:-1] / c_cap)
+        
+        # Boundaries
+        T_new[0, :] = T_new[1, :]    
+        T_new[-1, :] = T_new[-2, :]  
+        T_new[:, 0] = T[:, 0]
+        T_new[:, -1] = T[:, -1]
+        
+        # Apply mask
+        T = np.where(cond, T_new, T)
+            
+    return T
 
 #====== OLD/DEPRECATED FUNCTIONS ======
 
