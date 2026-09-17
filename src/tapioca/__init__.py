@@ -10,7 +10,7 @@ __version__ = "0.2.2"
 from ._variables import *
 
 # 2. Import Scenario Classes
-from .scenClasses import MandyocScen, VelocityFieldBuilder, MandyocBuilder
+from .scenClasses import MandyocScen, MandyocBuilder, VelocityFieldBuilder, TemperatureFieldBuilder
 
 # 3. Importing post processing objects and functions
 with catch_warnings(): #filtering warning for the preexisting attribute of the datatree accessor

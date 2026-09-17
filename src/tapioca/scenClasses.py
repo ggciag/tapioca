@@ -10,7 +10,7 @@ import xarray as xr
 from xarray import DataTree
 
 from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from ._aux_functions import read_params, ensure_directory_exists
+from ._aux_functions import read_params, ensure_directory_exists, _numba_diffusion_loop
 
 #Mandyoc Scenario class
 class MandyocScen:
@@ -1181,6 +1181,31 @@ class MandyocBuilder:
 
         return self
 
+    def create_temperature_field(self, tempbuilder:TemperatureFieldBuilder):
+        '''
+        Gets the `TemperatureFieldBuilder` class to create the temperature field within the scenario DataTree.
+
+        Parameters
+        ----------
+        tempbuilder:TemperatureFieldBuilder
+            The previous setup of the temperature field. It must be already treated.
+        '''
+    
+        temp = xr.DataArray(
+                        np.ones((self.Nx, self.Nz))*-1, 
+                        dims=('x', 'z'),
+                        coords={ 'x':self.x, 'z': self.z}
+                        )
+
+
+        temp[:] = tempbuilder.temperature
+        self.DTree.fields['temperature'].attrs['unit'] = 'deg C'
+        self.DTree.fields['temperature'].attrs['t_potential'] = tempbuilder.t_pot
+
+        self._print_verbose('Temperature field was created in the scenario builder.')
+
+        return self
+
     def export_interfaces(self, export:str='dataset'):
         '''
         Export the created interfaces into the "interfaces.txt" file required in Mandyoc.
@@ -1690,7 +1715,9 @@ class VelocityFieldBuilder:
 
 
 class TemperatureFieldBuilder:
-
+    '''
+    Class to facilitate the construction of temperature field for mandyoc scenarios.
+    '''
     def __init__(self, scenarioBuilder:MandyocBuilder, 
                  c_cap:float=1250.0,g:float=-10.0,alpha:float=3.28e-5):
 
@@ -1720,26 +1747,26 @@ class TemperatureFieldBuilder:
         
         self.temperature.attrs['unit']='deg C'
         
-        self.z_corr = -(self.temperature.z + self.thick_air)
+        self.z_corr = (self.temperature.z + self.thick_air)
         self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
 
 
-    def apply_basic_temperature(self,t_base:float,t_top:float,
-                 lithosphere_thickness:list|tuple,t_pot:float=1350.0,):
+    def apply_basic_temperature(self, lithosphere_thickness:list|tuple,t_pot:float=1350.0,):
 
         self.t_pot = t_pot
         self.lithosphere_thickness = lithosphere_thickness
-        self.temperature[:,:] = (t_pot)/lithosphere_thickness * self.ZZ.T
-        temp_adiabatic = t_pot / np.exp(self.g * self.alpha * self.ZZ.T / self.c_cap)
+        self.temperature[:,:] = (t_pot)/lithosphere_thickness * -self.ZZ.T
+        temp_adiabatic = t_pot / np.exp(self.g * self.alpha * -self.ZZ.T / self.c_cap)
         
 
-        self.temperature = xr.where(self.temperature<0, 0.0,self.temperature)
+        self.temperature = xr.where(self.temperature < 0, 0.0,self.temperature)
         self.temperature = xr.where(self.temperature>temp_adiabatic,temp_adiabatic,self.temperature)
 
     def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
 
         """
         Solves the 2D transient heat diffusion equation over a specified number of time steps.
+        It is very slow for medium-fine resolutions. Need improvements.
         """
         import numpy as np
         
@@ -1761,7 +1788,7 @@ class TemperatureFieldBuilder:
         kappa_max = np.max(kappa)
         dt_max = (dx**2 * dz**2) / (2 * kappa_max * (dx**2 + dz**2))            
 
-        cond = (self.ZZ.T < (self.lithosphere_thickness)) | (T == 0)
+        cond = (-self.ZZ.T >= (-self.lithosphere_thickness)) & (-self.ZZ.T <= 0)
 
         if (dt > dt_max) or (dt_years<=0):
             
@@ -1772,38 +1799,9 @@ class TemperatureFieldBuilder:
         self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
         self.scenario._print_verbose(f"{num_steps} steps to run.")
 
-        for step in range(num_steps):
-            T_new = np.copy(T)
-            
-            # 1. First derivatives of Temperature (dT/dx, dT/dz)
-            dT_dx = (T[2:, 1:-1] - T[:-2, 1:-1]) / (2 * dx)
-            dT_dz = (T[1:-1, 2:] - T[1:-1, :-2]) / (2 * dz)
-            
-            # 2. First derivatives of Diffusivity (dK/dx, dK/dz)
-            dK_dx = (kappa[2:, 1:-1] - kappa[:-2, 1:-1]) / (2 * dx)
-            dK_dz = (kappa[1:-1, 2:] - kappa[1:-1, :-2]) / (2 * dz)
-            
-            # 3. Second derivatives of Temperature (d2T/dx2, d2T/dz2)
-            d2T_dx2 = (T[2:, 1:-1] - 2 * T[1:-1, 1:-1] + T[:-2, 1:-1]) / (dx**2)
-            d2T_dz2 = (T[1:-1, 2:] - 2 * T[1:-1, 1:-1] + T[1:-1, :-2]) / (dz**2)
-            
-            # 4. Assemble the full diffusion terms
-            diffusion_x = kappa[1:-1, 1:-1] * d2T_dx2 + dK_dx * dT_dx
-            diffusion_z = kappa[1:-1, 1:-1] * d2T_dz2 + dK_dz * dT_dz
-            
-            # 5. Forward Euler update
-            T_new[1:-1, 1:-1] = T[1:-1, 1:-1] + dt * (diffusion_x + diffusion_z + H[1:-1, 1:-1] / self.c_cap)
-            
-            # 6. Apply Boundary Conditions
-            # Zero heat flux on lateral boundaries
-            T_new[0, :] = T_new[1, :]    
-            T_new[-1, :] = T_new[-2, :]  
-            
-            # Assuming fixed temperatures at the top and bottom bounds
-            T_new[:, 0] = T[:, 0]
-            T_new[:, -1] = T[:, -1]
-            
-            T = xr.where(cond, T, T_new)
+        T = _numba_diffusion_loop(
+            T, kappa, H, self.c_cap, dx, dz, dt, num_steps, cond
+        )
 
         # Push updated values back to the DataArray
         if self.temperature.dims == ('z', 'x'):
@@ -1828,8 +1826,11 @@ class TemperatureFieldBuilder:
         kappa_1d = self.kappa.isel(x=x_inx).values.copy()
         H_1d = self.H.isel(x=x_inx).values.copy()
 
-        cond = (self.z_corr < (self.lithosphere_thickness)) | (T_1d == 0)
-
+        cond = (self.z_corr.values >= (-self.lithosphere_thickness)) & (self.z_corr.values < 0)
+        # print(f'z>{(-self.lithosphere_thickness)}')
+        # print(f'z<{0}')
+        # print(self.z_corr[cond])
+        
         dz = abs(self.z[1] - self.z[0])
         
         # 2. CFL Condition (1D limit is less restrictive than 2D)
@@ -1840,7 +1841,10 @@ class TemperatureFieldBuilder:
             print(f"Warning: Input dt exceeds 1D stable limit ({dt_max/SEC_PER_YEAR:.2e} yrs).")
             dt = dt_max * 0.99
             num_steps = int((time_max * SEC_PER_YEAR) / dt)
-            
+
+        self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
+        self.scenario._print_verbose(f"{num_steps} steps to run.")
+        
         # 3. 1D Finite Difference Loop
         for step in range(num_steps):
             T_new = np.copy(T_1d)
@@ -1860,7 +1864,7 @@ class TemperatureFieldBuilder:
             T_new[0] = T_1d[0]
             T_new[-1] = T_1d[-1]
             
-            T_1d = xr.where(cond, T_1d, T_new)
+            T_1d = np.where(cond, T_new, T_1d)
             
         # 4. Replicate and map back to 2D
         nx = len(self.x)
