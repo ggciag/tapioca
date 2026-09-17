@@ -1123,13 +1123,15 @@ class MandyocBuilder:
     def create_velocity_field(self, velocbuilder:VelocityFieldBuilder=None, 
                                   vxconst:float=0,vzconst:float=0):
         '''
-        Gets the `VelocityFieldBuilder` class to create the vx and vz fields within the scenario DataTree. Constant values of `vx` and `vz` can be given. 
+        Gets the `VelocityFieldBuilder` class to create the vx and vz fields within the 
+        scenario DataTree. Constant values of `vx` and `vz` can be given. 
         This function automatically converts cm/y to m/s.
 
         Parameters
         ----------
         velocbuilder:VelocityFieldBuilder
-            The previous setup of the velocity field in the boundaries. It must be already treated to avoid divergences.
+            The previous setup of the velocity field in the boundaries. It must be 
+            already treated to avoid divergences.
         
         vx:float, optional
             Value for the vx if velocbuilder is not gave.
@@ -1183,7 +1185,8 @@ class MandyocBuilder:
 
     def create_temperature_field(self, tempbuilder:TemperatureFieldBuilder):
         '''
-        Gets the `TemperatureFieldBuilder` class to create the temperature field within the scenario DataTree.
+        Gets the `TemperatureFieldBuilder` class to create the temperature field within 
+        the scenario DataTree.
 
         Parameters
         ----------
@@ -1216,7 +1219,8 @@ class MandyocBuilder:
         ----------
 
         export : str, optional
-            Mode of saving the created interfaces into a more readable file. Support modes are 'CSV' and 'dataset' (netcdf file).
+            Mode of saving the created interfaces into a more readable file. Support 
+            modes are 'CSV' and 'dataset' (netcdf file).
 
             Default is `'dataset'`. 
         '''
@@ -1300,7 +1304,8 @@ class MandyocBuilder:
     def export_field(self,field:str,header:str=''):
         '''
         Function to export fields in the mandyoc required format.
-        For the velocity or temperature field, this function exports the field with the appropriates name.
+        For the velocity or temperature field, this function exports the field with the 
+        appropriates name.
 
         Parameters
         ----------
@@ -1364,14 +1369,16 @@ class VelocityFieldBuilder:
         (1) Initialize the VelocityFieldBuilder with your current scenario;
         (2) Set velocities using `set_region` or `linear_velocity` functions;
         (3) Check the field conservation using the function `integrate_normal_components`;
-        (4) Apply the velocity correction using the function `conservate_veloc`. Maybe you should to iterate this step until to reach a tolerance divergence.
+        (4) Apply the velocity correction using the function `conservate_veloc`. Maybe you 
+        should to iterate this step until to reach a tolerance divergence.
         (5) Brief visualize the velocities with `view_veloc`.
 
         Parameters
         ----------
 
         scenarioBuilder: MandyocBuilder
-            The scenario that will recieve the velocity field. The VelocityFieldBuilder will get all parameters and attributes from the scenario class.
+            The scenario that will recieve the velocity field. The VelocityFieldBuilder will 
+            get all parameters and attributes from the scenario class.
         
         units: str, optional
             The units of the velocity field. It must be 'cm/y' or 'm/s'.
@@ -1481,7 +1488,8 @@ class VelocityFieldBuilder:
         
         V = a * COORD + b
 
-        The user can give the limits and the velocities to calculate `a` and `b` or give these parameters directly.  
+        The user can give the limits and the velocities to calculate `a` and `b` or give 
+        these parameters directly.  
 
         Parameters
         ----------
@@ -1492,15 +1500,18 @@ class VelocityFieldBuilder:
             Which velocity component are being set ('vx' or 'vz').
             
         range: list|tuple|numpy.ndarray
-            The min and max values on the given boundary to apply the velocities, such as [XMIN,XMAX] or [ZMIN,ZMAX].
+            The min and max values on the given boundary to apply the velocities, such 
+            as [XMIN,XMAX] or [ZMIN,ZMAX].
 
         clims: list|tuple|numpy.ndarray, optional
-            The min and max values in the coordinate to calculate the line slope, such as [XMIN,XMAX] or [ZMIN,ZMAX]. If None, `coef` and `b` must be given. 
+            The min and max values in the coordinate to calculate the line slope, such 
+            as [XMIN,XMAX] or [ZMIN,ZMAX]. If None, `coef` and `b` must be given. 
 
             Default is None.
 
         vlims: list|tuple|numpy.ndarray, optional
-            The velocity values in the coordinates given in `clims`. If None, `coef` and `b` must be given. 
+            The velocity values in the coordinates given in `clims`. 
+            If None, `coef` and `b` must be given. 
 
             Default is None.
         
@@ -1593,7 +1604,8 @@ class VelocityFieldBuilder:
 
     def conservate_veloc(self,boundary:str='bot', correction_factor:float=1.0):
         '''
-        Apply the divergence of the velocity field, or a fraction of it, field into a whole boundary. 
+        Apply the divergence of the velocity field, or a fraction of it, field into 
+        a whole boundary. 
 
         Parameters
         ----------
@@ -1719,12 +1731,14 @@ class VelocityFieldBuilder:
 class TemperatureFieldBuilder:
     
     '''
-    Constructs the 2D thermal field for Mandyoc scenarios, using the created spatial grid and material data structures.
+    Constructs the 2D thermal field for Mandyoc scenarios, using the created spatial grid 
+    and material data structures.
 
     Parameters
     ----------
     scenarioBuilder: MandyocBuilder
-        The primary scenario instance containing grid geometry and pre-populated material property fields.
+        The primary scenario instance containing grid geometry and pre-populated material 
+        property fields.
 
     c_cap: float, optional
         Specific heat capacity (in J/(kg K)). Defaults to 1250.0.
@@ -1768,16 +1782,20 @@ class TemperatureFieldBuilder:
         2D spatial radiogenic heat production field mapped from the scenario tree.
 
     k_cond: xarray.DataArray 
-        2D thermal conductivity field, automatically computed upon initialization as the product of kappa, rho, and c_cap.
+        2D thermal conductivity field, automatically computed upon initialization 
+        as the product of kappa, rho, and c_cap.
 
     temperature: xarray.DataArray 
-        2D thermal field array of shape (Nx, Nz) initialized to 0.0. Coordinates are mapped to x and z, with internal attributes explicitly defining units as 'deg C'.
+        2D thermal field array of shape (Nx, Nz) initialized to 0.0. Coordinates are 
+        mapped to x and z, with internal attributes explicitly defining units as 'deg C'.
 
     z_corr: xarray.DataArray
-        Vertical coordinates vertically offset by the sticky air thickness (z + thick_air) to evaluate true structural depth from the geological surface.
+        Vertical coordinates vertically offset by the sticky air thickness (z + thick_air) 
+        to evaluate true structural depth from the geological surface.
 
     XX, ZZ (numpy.ndarray)
-        2D spatial coordinate meshgrids generated from x and z_corr. Used for fast vectorized matrix masking, boolean logic, and depth-dependent numerical conditions.
+        2D spatial coordinate meshgrids generated from x and z_corr. Used for fast 
+        vectorized matrix masking, boolean logic, and depth-dependent numerical conditions.
     '''
 
     def __init__(self, scenarioBuilder:MandyocBuilder, 
@@ -1815,14 +1833,17 @@ class TemperatureFieldBuilder:
 
     def apply_basic_temperature(self, lithosphere_thickness:float,t_pot:float=1350.0,):
         '''
-        This function initiate the temperature field combining a linear gradient within the lithosphere and an adiabatic gradient in the mantle.
+        This function initiate the temperature field combining a linear gradient within the 
+        lithosphere and an adiabatic gradient in the mantle.
 
-        Future implementations: make it for each column based on the interface names instead assuming a constant lithosphere.
+        Future implementations: make it for each column based on the interface names instead 
+        assuming a constant lithosphere.
 
         Parameters
         ----------
         lithosphere_thickness: float
-            The vertical thickness of the lithosphere used to calculate the initial linear thermal gradient.
+            The vertical thickness of the lithosphere used to calculate the initial 
+            linear thermal gradient.
 
         t_pot: float, optional
             The potential temperature of the asthenosphere/mantle boundary.
@@ -1902,6 +1923,10 @@ class TemperatureFieldBuilder:
         '''
         This function solves the 1D transient heat diffusion equation on a single vertical 
         column and replicates the resulting thermal profile across the entire 2D domain.
+
+        Future implementations: Apply this calculated profile in a determined range instead in 
+        the whole scenario. However, it is possible to create more than one temperature builder
+        and to filter the thermal field, applying both builders in differente regions.  
 
         Parameters
         ----------

@@ -3,7 +3,7 @@ import numpy as np
 __all__ = ["VARIABLES_LIST","VARS_TYPES",
            "SEC_PER_YEAR","CM",
            "INTERFACES_PARAMETERS","DEFAULT_MATERIAL","MATERIAL_PARAMETERS","PARAMETERS_UNITS"
-           ]
+           "DEFAULT_MATERIALS"]
 
 VARIABLES_LIST:list = ["density",
 "heat",
@@ -51,7 +51,7 @@ CM:float = 1/2.54 # cm per inch -> convert plotting to centimeters by *cm
 """float: Conversion factor of inches to centimeters. Useful to change matplotlib measures."""
 
 INTERFACES_PARAMETERS:dict = {
-    "C": "compositional_factor",
+    "C": "scale_factor",
     "rho": "density",
     "H": "radiogenic_heat",
     "A": "pre-exponential_scale_factor",
@@ -92,7 +92,7 @@ PARAMETERS_UNITS:dict = {
     "H" : 'W/kg',
     "A" : 'Pa^(-n)/s',
     "n" : 'dimensionless',
-    "Q" : 'kJ/mol',
+    "Q" : 'J/mol',
     "V" : 'm3/mol',
     "k" : 'm2/s',
     "weakening_seed" : 'dimensionless',
@@ -102,6 +102,101 @@ PARAMETERS_UNITS:dict = {
     "friction_angle_max": 'degrees',
 }
 """dict: Dictionary containing the units for each interface parameters."""
+
+DEFAULT_MATERIALS:dict = {
+    "WET_OLIVINE": { # Karato and Wu (1993)
+        "C": 1.0,
+        "rho": 3378.0,
+        "H": 0.0,
+        "A": 1.393e-14,
+        "n": 3.0,
+        "Q": 429000.0,
+        "V": 1.450e-05,
+        "k": 1.0e-6,
+        "weakening_seed": -1.0,
+        "cohesion_min": 4000000.0,
+        "cohesion_max": 20000000.0,
+        "friction_angle_min": 2.0,
+        "friction_angle_max": 15.0
+    },
+    "DRY_OLIVINE": { # Karato and Wu (1993)
+        "C": 1.0,
+        "rho": 3354.0,
+        "H": 9.000e-12,
+        "A": 2.417e-15,
+        "n": 3.5,
+        "Q": 540000.0,
+        "V": 2.450e-05,
+        "k": 1.0e-6,
+        "weakening_seed": -1.0,
+        "cohesion_min": 4000000.0,
+        "cohesion_max": 20000000.0,
+        "friction_angle_min": 2.0,
+        "friction_angle_max": 15.0
+    },
+    "WET_QUARTZ": {  # Glean and Tullis (1995)
+        "C": 1.0,
+        "rho": 2700.0,
+        "H": 4.630e-10,
+        "A": 8.574e-28,
+        "n": 4.0,
+        "Q": 222000.0,
+        "V": 0.0,
+        "k": 1.0e-6,
+        "weakening_seed": -1.0,
+        "cohesion_min": 4000000.0,
+        "cohesion_max": 20000000.0,
+        "friction_angle_min": 5.0,
+        "friction_angle_max": 15.0
+    },
+    "WET_ANORTHITE": { # Rybacki and Dresen (2000); Andrés-Martínez et al. (2019)
+        "C": 1.0,
+        "rho": 2850.0,
+        "H": 7.123e-11,        # 0.041 uW/m^3
+        "A": 8.913e-22,     # 10^-21.05
+        "n": 3.0,
+        "Q": 356000.0,      # 356 kJ/mol
+        "V": 0.0,
+        "k": 1.15e-6,
+        "weakening_seed": -1.0,
+        "cohesion_min": 4000000.0,
+        "cohesion_max": 25000000.0,
+        "friction_angle_min": 2.0,
+        "friction_angle_max": 25.0
+    },
+    "LINEAR_SALT": { # Massimi et al. (2007); Pichel et al. (2022)
+        "C": 1.0,
+        "rho": 2200.0,
+        "H": 0.0,
+        "A": 2.0e-19,
+        "n": 4.0,
+        "Q": 0.0,
+        "V": 0.0,
+        "k": 3.5e-6,
+        "weakening_seed": -1.0,
+        "cohesion_min": 4000000.0,
+        "cohesion_max": 20000000.0,
+        "friction_angle_min": 2.0,
+        "friction_angle_max": 15.0
+    },
+    "AIR": { 
+        "C": 0.1,
+        "rho": 1.0,
+        "H": 0.0,
+        "A": 1.0e-18,
+        "n": 1.0,
+        "Q": 0.0,
+        "V": 0.0,
+        "k": 1.0e-5,
+        "weakening_seed": -1.0,
+        "cohesion_min": 100000.0,
+        "cohesion_max": 1000000.0,
+        "friction_angle_min": 2.0,
+        "friction_angle_max": 5.0
+    }
+}
+'''dict: Dictionary with the parameters of some "classic" rheologies. The rheology is the key and the values is the parameters.'''
+
 
 # Useful data types descriptions:
 
