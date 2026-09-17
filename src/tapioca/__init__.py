@@ -4,7 +4,7 @@ Tapioca-Mandyoc: Input and Output management and post-processing for Mandyoc geo
 
 from warnings import catch_warnings, filterwarnings
 
-__version__ = "0.2.2"
+__version__ = "0.5.0"
 
 # 1. Import variables
 from ._variables import *
