@@ -1272,7 +1272,7 @@ class MandyocBuilder:
 
         max_seq += 3
         print(max_seq)
-        with open(f"{self.path}interfaces.txt", "w") as f:
+        with open(os.path.join(self.path,"interfaces.txt"), "w") as f:
             for line in base_text.split("\n")[:-1]:
                 all_seqs = line.strip().split('  ')
                 f.write(all_seqs[0].ljust(21)) # 21 spaces -> len of "friction_angle_***   "
@@ -1282,7 +1282,7 @@ class MandyocBuilder:
 
                 f.write("\n")
 
-            np.savetxt(f, interfaces_list, fmt="%.1f")
+            np.savetxt(f, interfaces_list[:,:-1], fmt="%.1f")
 
             f.close()
 
@@ -1301,7 +1301,7 @@ class MandyocBuilder:
             
         return True
 
-    def export_field(self,field:str,header:str=''):
+    def export_field(self,field:str,header:str='',ind:int=0):
         '''
         Function to export fields in the mandyoc required format.
         For the velocity or temperature field, this function exports the field with the 
@@ -1313,33 +1313,31 @@ class MandyocBuilder:
             Field to be exported. The special fields are (`velocity`,`temperature`)
         header:str, optional
             Comments in the header of the file. Default is ''.
+        ind:int, optional
+            Index of the exported temperature or velocity field. Default is 0.
         '''
         name=field
-        if len(header)==0: header='v1\nv2\nv3\nv4'
+        if len(header)==0: header='L1\nL2\nL3\nL4'
         
         if field == 'velocity':    
-            vx = self.DTree.fields.vx
-            vz = self.DTree.fields.vz
+            vx = self.DTree.fields.vx.transpose('z', 'x').values.flatten()
+            vz = self.DTree.fields.vz.transpose('z', 'x').values.flatten()
 
-            vvx = vx.values.reshape(self.Nx*self.Nz)
-            vvz = vz.values.reshape(self.Nx*self.Nz)
+            data_export = np.empty(vx.size * 2, dtype=vx.dtype)
+            data_export[0::2] = vx
+            data_export[1::2] = vz
 
-            velocity_export = np.zeros((2, self.Nx * self.Nz))
-            velocity_export[0,:] = vvx
-            velocity_export[1,:] = vvz
-
-            data_export = np.reshape(velocity_export.T, (np.size(velocity_export)))
-            name = 'input_velocity_0'
+            name = f'input_velocity_{ind}'
 
         else:
-            data = self.DTree.fields[field]
-            data_export = np.reshape(data.values, (self.Nx * self.Nz))
+            data = self.DTree.fields[field].transpose('z', 'x').values
+            data_export = data.flatten()
             
             if field=='temperature':
-                name='input_temperature_0'
+                name=f'input_temperature_{ind}'
 
         self._print_verbose(f'Exporting velocity field ({len(data_export)})')
-        np.savetxt(f"{self.path}{name}.txt", data_export, header=header)
+        np.savetxt(os.path.join(self.path,f"{name}.txt"), data_export, header=header)
 
         return self
     
@@ -1625,7 +1623,7 @@ class VelocityFieldBuilder:
             normal = 1 if boundary == 'top' else -1
             vz_compensation = (target_flux / abs(self.Lx)) * normal
             
-            ranges = [self.x.min(), self.x.max()]
+            ranges = [self.x.min()+1.5*self.dx, self.x.max()-1.5*self.dx]
             
             self.scenario._print_verbose(f"Applying compensating Vz = {vz_compensation:.3e} to {boundary}")
             self.set_region(boundary, ranges, vz=vz_compensation, mode='add')
@@ -1635,7 +1633,7 @@ class VelocityFieldBuilder:
             normal = 1 if boundary == 'right' else -1
             vx_compensation = (target_flux / abs(self.Lz)) * normal
             
-            ranges = [self.z.min(), self.z.max()]
+            ranges = [self.z.min()+1.5*self.dz, self.z.max()-1.5*self.dz]
             
             self.scenario._print_verbose(f"Applying compensating Vx = {vx_compensation:.3e} to {boundary}")
             self.set_region(boundary, ranges, vx=vx_compensation, mode='add')
