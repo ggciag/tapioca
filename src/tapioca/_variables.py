@@ -174,10 +174,10 @@ DEFAULT_MATERIALS:dict = {
         "V": 0.0,
         "k": 3.5e-6,
         "weakening_seed": -1.0,
-        "cohesion_min": 4000000.0,
-        "cohesion_max": 20000000.0,
+        "cohesion_min": 2000000.0,
+        "cohesion_max": 5000000.0,
         "friction_angle_min": 2.0,
-        "friction_angle_max": 15.0
+        "friction_angle_max": 5.0
     },
     "AIR": { 
         "C": 0.1,
