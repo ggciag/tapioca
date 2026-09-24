@@ -10,7 +10,7 @@ import xarray as xr
 from xarray import DataTree
 
 from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from ._aux_functions import read_params, ensure_directory_exists, _numba_diffusion_loop
+from ._aux_functions import read_params, ensure_directory_exists, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
 
 #Mandyoc Scenario class
 class MandyocScen:
@@ -787,6 +787,9 @@ class MandyocBuilder:
         self.x = np.linspace(0, self.Lx, self.Nx)
         self.z = np.linspace(self.Lz, 0, self.Nz)
 
+        self.dx = self.x[1] - self.x[0]
+        self.dz = self.z[0] - self.z[1]
+
         # Creating the DataTree structure to store the model layers
         self.DTree = DataTree.from_dict( {"fields":
                             xr.Dataset(coords={'x': self.x, 'z': self.z}), 
@@ -807,6 +810,8 @@ class MandyocBuilder:
             self.Ny = Ny
             self.dimensions = 3
             self.y = np.linspace(0, self.Ly, self.Ny)
+            self.dy = self.y[1] - self.y[0]
+
             self.DTree = DataTree.from_dict( {"fields":
                                 xr.Dataset(coords={'x': self.x, 'y': self.y, 'z': self.z}), 
                                         "interfaces":xr.Dataset(coords={'x': self.x, 'y': self.y})})
@@ -856,8 +861,8 @@ class MandyocBuilder:
             Default is None.
 
         **material
-            Rheological and thermal parameters for the layer. These inputs overwrite the properties in DEFAULT_MATERIAL. 
-            A density value ('rho') must be explicitly provided or the function will raise a ValueError.
+            Rheological and thermal parameters for the layer. These inputs overwrite the properties of the `DEFAULT_MATERIAL`. 
+            A density value ('rho') must be explicitly provided or the function raises a ValueError.
         
         '''
 
@@ -1113,7 +1118,7 @@ class MandyocBuilder:
             field = xr.where(cond, fill_value, field)
 
             field.attrs['parameter'] = INTERFACES_PARAMETERS[p]
-            field.attrs['unit'] = PARAMETERS_UNITS[p]
+            field.attrs['units'] = PARAMETERS_UNITS[p]
 
             self.DTree.fields[p] = field
             self._print_verbose(f'Field created: {INTERFACES_PARAMETERS[p]} [{PARAMETERS_UNITS[p]}]')
@@ -1176,8 +1181,8 @@ class MandyocBuilder:
             self.DTree.fields['vz'] = vz * fac
 
 
-        self.DTree.fields['vx'].attrs['unit'] = 'm/s'
-        self.DTree.fields['vz'].attrs['unit'] = 'm/s'
+        self.DTree.fields['vx'].attrs['units'] = 'm/s'
+        self.DTree.fields['vz'].attrs['units'] = 'm/s'
 
         self._print_verbose('Velocity field was created in the scenario builder.')
 
@@ -1204,12 +1209,190 @@ class MandyocBuilder:
         temp[:] = tempbuilder.temperature
         
         self.DTree.fields['temperature'] = temp
-        self.DTree.fields['temperature'].attrs['unit'] = 'deg C'
+        self.DTree.fields['temperature'].attrs['units'] = 'deg C'
         self.DTree.fields['temperature'].attrs['t_potential'] = tempbuilder.t_pot
+        self.DTree.fields['temperature'].attrs['alpha'] = tempbuilder.alpha
+        self.DTree.fields['temperature'].attrs['c_cap'] = tempbuilder.c_cap
 
         self._print_verbose('Temperature field was created in the scenario builder.')
 
+        self.alpha = tempbuilder.alpha
+        self.c_cap = tempbuilder.c_cap
+
         return self
+
+
+    def calculate_litho_pressure(self, alpha:float=None, g:float=-10):
+        '''
+        Calculate the lithostatic pressure in each cell by integrating the effective density along the Z-axis. This function 
+        considers the temperature field and the parameters used in the `TemperatureFieldBuilder`. The effective density is
+        stored within the `fields`dataset as "thermal_rho". 
+        You can set a alpha=0 to disconsider thermal volumetric expansion.  
+
+        
+        P(x,z) = (Int_0->z rho_eff dz)_x * g * dz 
+
+        where rho_eff is function of the temperature field:
+
+        rho_eff(x,z) = rho(x,z) * (1 + alpha * T)
+
+        Parameters
+        ----------
+
+        alpha:float, optional
+            Volumetric thermal expansion coefficient (in K^-1). If None, the alpha from `TemperatureFieldBuilder` will be used. 
+            Default is None.
+
+        g:float, optional
+            Gravitational acceleration (in m2/s). 
+            Default is -10.0.
+        
+        '''
+
+        if alpha is None:
+            alpha = self.alpha
+            self._print_verbose(f'Using thermal expansion coefficient used in the `TemperatureFieldBuilder`: alpha={alpha}')
+            
+
+        self.DTree.fields['rho_thermal']=(self.DTree.fields.rho*(1+alpha*self.DTree.fields.temperature))
+        self.DTree.fields['rho_thermal'].rename('rho_thermal')
+        self.DTree.fields['rho_thermal'].attrs['units']='kg/m3'
+        self.DTree.fields['rho_thermal'].attrs['parameter']=''
+
+        self.DTree.fields['litho_P'] = (self.DTree.fields.rho_thermal[::-1].cumsum(axis=0,keep_attrs=False)*self.dz*g)
+        self.DTree.fields['litho_P'].rename('litho_P')
+        self.DTree.fields['litho_P'].attrs['units']='Pa'
+        self.DTree.fields['litho_P'].attrs['parameter']=''
+
+        self._print_verbose('Lithostatic pressure was calculated.')
+
+        return self
+
+    def calculate_YSE(self, plastic:str='druker-prager', viscous:str='dislocation', **kargs):
+        '''
+        Calculate the Yield Stress Envelope considering the viscoplastic rheology adopted in Mandyoc (initial and softened). 
+        Furthermore, this function creates the plastic and viscous YSE and stores it in the `fields` dataset.
+
+        See Sacek et al. (2022) and Gerya (2019) for more details.
+
+        Functions can be checked in `aux_functions.py`.
+
+        Parameters
+        ----------
+
+        plastic:str, optional
+            The plastic rheology adopted. Supported modes are `drucker-prager` and `byerlee`.
+            Default is `drucker-prager`.
+        
+        viscous:str, optional
+            The viscous rheology adopted. The only mode supported is the dislocation creep (`dislocation`).
+            Default is `dislocation`
+
+        KeyArgs
+        -------
+        
+        sr:float
+            The reference strain rate (in s^-1) used in the Arrhenius-type viscosity. 
+            If not given, is set as `1e-15`.
+
+        R:float
+            Universal gas constant. 
+            If not given, is set as `8.314`.
+        
+        alpha:float
+            Volumetric thermal expansion coefficient (in K^-1).
+            If not given, is set as `None` and the value of `TemperatureFieldBuilder` will be used.
+
+        g:float
+            Gravitational acceleration (in m2/s). 
+            If not given, is set as `-10`.
+
+        mu:float
+            Friction coefficient of Byerlee law. Only relevant if `plastic=byerlee`.
+            If not given, is set as `0.6`.
+
+        '''
+        if 'litho_P' not in self.DTree.fields:
+            alpha = kargs.get('alpha',None)
+            g = kargs.get('g',-10)
+            self.calculate_litho_pressure(alpha, g)
+
+        sr = kargs.get('sr',1e-15)
+        R = kargs.get('R',8.314)
+        TK = self.DTree.fields.temperature + 273 # K
+
+        C = self.DTree.fields.C
+        A = self.DTree.fields.A
+        V = self.DTree.fields.V
+        n = self.DTree.fields.n
+        Q = self.DTree.fields.Q
+
+        P = self.DTree.fields.litho_P
+
+        c = self.DTree.fields.cohesion_max  #cohesion initial
+        c_soft = self.DTree.fields.cohesion_min  #after strain softening
+        
+        if plastic.lower() == 'druker-prager':
+            phi = self.DTree.fields.friction_angle_max #friction angle
+            phi_soft = self.DTree.fields.friction_angle_min #after strain softening
+
+            self.DTree.fields['plastic_YSE'] = _Druker_Prager_YS(c, phi, P)
+            self.DTree.fields['plastic_YSE_soft'] = _Druker_Prager_YS(c_soft, phi_soft, P)
+
+            self.DTree.fields['plastic_YSE'].attrs['method'] = 'Druker-Prager'
+            self.DTree.fields['plastic_YSE_soft'].attrs['method'] = 'Druker-Prager'
+
+            self._print_verbose('Plastic rheology: Druker-Prager Criterion')
+
+        elif plastic.lower() == 'byerlee':
+            mu = kargs.get('mu',0.6) #generic values
+            self.DTree.fields['plastic_YSE'] = _Byerlee_law_YS(c,mu,P)
+            self.DTree.fields['plastic_YSE_soft'] = _Byerlee_law_YS(c_soft,mu,P)
+
+            self.DTree.fields['plastic_YSE'].attrs['method'] = 'Byerlee'
+            self.DTree.fields['plastic_YSE_soft'].attrs['method'] = 'Byerlee'
+            
+            self._print_verbose('Plastic rheology: Byerlee-law')
+
+        else:
+            print("Choose a valid mode for plastice criteria: 'drucker-prager' or 'byerlee'.")
+        
+        self.DTree.fields['plastic_YSE'].rename('plastic_YSE') 
+        self.DTree.fields['plastic_YSE'].attrs['units'] = 'Pa'
+        self.DTree.fields['plastic_YSE_soft'].rename('plastic_YSE_soft') 
+        self.DTree.fields['plastic_YSE_soft'].attrs['units'] = 'Pa'
+
+        if viscous.lower() == 'dislocation':
+            visc = _visc_dislocation_creep(sr,A,C,n,Q,V,P,R,TK)
+
+            self.DTree.fields['viscous_YSE'] = visc * sr
+            self.DTree.fields['viscous_YSE'].rename('viscous_YSE') 
+            self.DTree.fields['viscous_YSE'].attrs['units'] = 'Pa'
+            self.DTree.fields['viscous_YSE'].attrs['method'] = 'Dislocation creep'
+            self.DTree.fields['viscous_YSE'].attrs['strain_rate'] = sr
+            self._print_verbose('Viscous rheology: dislocation creep')
+
+        else:
+            print("The only method available in this version is 'dislocation'.")
+            print("Next versions may consider the dislocation creep mode.")
+            
+        self.DTree.fields['YSE'] = xr.where(self.DTree.fields['viscous_YSE']<self.DTree.fields['plastic_YSE'],self.DTree.fields['viscous_YSE'],self.DTree.fields['plastic_YSE'])
+        self.DTree.fields['YSE_soft'] = xr.where(self.DTree.fields['viscous_YSE']<self.DTree.fields['plastic_YSE_soft'],self.DTree.fields['viscous_YSE'],self.DTree.fields['plastic_YSE_soft'])
+
+        self.DTree.fields['YSE'].rename('YSE')
+        self.DTree.fields['YSE'].attrs['units'] = 'Pa'
+        self.DTree.fields['YSE'].attrs['strain_rate'] = sr
+
+        self.DTree.fields['YSE_soft'].rename('YSE_soft')
+        self.DTree.fields['YSE_soft'].attrs['strain_rate'] = sr
+        self.DTree.fields['YSE_soft'].attrs['units'] = 'Pa'
+
+        self._print_verbose("Yield Strength Envelopte was calculated.")
+
+        return self
+
+
+    
 
     def export_interfaces(self, export:str='dataset'):
         '''
@@ -1336,7 +1519,7 @@ class MandyocBuilder:
             if field=='temperature':
                 name=f'input_temperature_{ind}'
 
-        self._print_verbose(f'Exporting velocity field ({len(data_export)})')
+        self._print_verbose(f'Exporting {field} field ({len(data_export)})')
         np.savetxt(os.path.join(self.path,f"{name}.txt"), data_export, header=header)
 
         return self
@@ -1411,8 +1594,8 @@ class VelocityFieldBuilder:
         self.x = scenarioBuilder.x
         self.z = scenarioBuilder.z
 
-        self.dx = self.x[1] - self.x[0]
-        self.dz = self.z[1] - self.z[0]
+        self.dx = scenarioBuilder.dx
+        self.dz = scenarioBuilder.dz
 
         self.boundaries = ['left','right','top','bot']
         #self.velocs = xr.Dataset(dims=('x','z'),coords={'x':self.x, 'z':self.z})
@@ -1811,6 +1994,9 @@ class TemperatureFieldBuilder:
         self.z = scenarioBuilder.z
         self.thick_air = scenarioBuilder.thick_air
 
+        self.dx = scenarioBuilder.dx
+        self.dz = scenarioBuilder.dz
+
         self.g = g
         self.alpha = alpha
         self.c_cap = c_cap
@@ -1823,7 +2009,7 @@ class TemperatureFieldBuilder:
         self.temperature = xr.DataArray(np.zeros((self.Nx,self.Nz),np.float64),dims=('x','z'),
                                      coords={'x':self.x,'z':self.z})
         
-        self.temperature.attrs['unit']='deg C'
+        self.temperature.attrs['units']='deg C'
         
         self.z_corr = (self.temperature.z + self.thick_air)
         self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
@@ -1888,8 +2074,8 @@ class TemperatureFieldBuilder:
         H = self.H.transpose('x', 'z').values
         
         # Grid spacing
-        dx = abs(self.x[1] - self.x[0])
-        dz = abs(self.z[1] - self.z[0])
+        dx = abs(self.dx)
+        dz = abs(self.dz)
         
         # Ensure numerical stability (CFL condition)
         kappa_max = np.max(kappa)
@@ -1959,7 +2145,7 @@ class TemperatureFieldBuilder:
         # print(f'z<{0}')
         # print(self.z_corr[cond])
         
-        dz = abs(self.z[1] - self.z[0])
+        dz = abs(self.dz)
         
         # 2. CFL Condition (1D limit is less restrictive than 2D)
         kappa_max = np.max(kappa_1d)
