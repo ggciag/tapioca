@@ -116,7 +116,7 @@ DEFAULT_MATERIALS:dict = {
         "weakening_seed": -1.0,
         "cohesion_min": 4000000.0,
         "cohesion_max": 20000000.0,
-        "friction_angle_min": 2.0,
+        "friction_angle_min": 4.0,
         "friction_angle_max": 15.0
     },
     "DRY_OLIVINE": { # Karato and Wu (1993)
@@ -131,7 +131,7 @@ DEFAULT_MATERIALS:dict = {
         "weakening_seed": -1.0,
         "cohesion_min": 4000000.0,
         "cohesion_max": 20000000.0,
-        "friction_angle_min": 2.0,
+        "friction_angle_min": 4.0,
         "friction_angle_max": 15.0
     },
     "WET_QUARTZ": {  # Glean and Tullis (1995)
@@ -146,14 +146,14 @@ DEFAULT_MATERIALS:dict = {
         "weakening_seed": -1.0,
         "cohesion_min": 4000000.0,
         "cohesion_max": 20000000.0,
-        "friction_angle_min": 5.0,
+        "friction_angle_min": 2.0,
         "friction_angle_max": 15.0
     },
     "WET_ANORTHITE": { # Rybacki and Dresen (2000); Andrés-Martínez et al. (2019)
         "C": 1.0,
         "rho": 2850.0,
         "H": 7.123e-11,        # 0.041 uW/m^3
-        "A": 8.913e-22,     # 10^-21.05
+        "A": 3.9810717e-16, #8.913e-22,     # 10^-21.05
         "n": 3.0,
         "Q": 356000.0,      # 356 kJ/mol
         "V": 0.0,
@@ -162,7 +162,7 @@ DEFAULT_MATERIALS:dict = {
         "cohesion_min": 4000000.0,
         "cohesion_max": 25000000.0,
         "friction_angle_min": 2.0,
-        "friction_angle_max": 25.0
+        "friction_angle_max": 20.0
     },
     "LINEAR_SALT": { # Massimi et al. (2007); Pichel et al. (2022)
         "C": 1.0,

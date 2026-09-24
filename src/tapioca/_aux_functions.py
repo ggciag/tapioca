@@ -8,7 +8,9 @@ from pathlib import Path
 
 from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS
 
-__all__ = ["read_params","read_data","ensure_directory_exists","_numba_diffusion_loop"]
+__all__ = ["read_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
+           "_numba_diffusion_loop",
+           "_Druker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
 
 # Old functions, mostly made to handle the old format of data management
 # Could be useful for people using older versions of Mandyoc
@@ -120,6 +122,59 @@ def ensure_directory_exists(folder_path: str|Path):
 
     return True
 
+def export_compressed_dataset(ds, filename, complevel=5):
+    """
+    Exports an xarray.Dataset to a compressed NetCDF4 file.
+    
+    Parameters
+    ----------
+    dt : xarray.Dataset
+        The Dataset containing the groups.
+    filename : str
+        The output file path.
+    complevel : int
+        Compression level from 1 (fastest) to 9 (smallest file size). 
+        Default is 5.
+    """
+
+    for var_name, var_data in ds.data_vars.items():
+        var_data.encoding.update({
+            'zlib': True, 
+            'complevel': complevel
+        })
+            
+    # Export the dataset to a NetCDF4 file
+    ds.to_netcdf(filename, engine="h5netcdf")
+
+    print(f"Successfully exported compressed Dataset to {filename}")
+
+def export_compressed_datatree(dt, filename, complevel=5):
+    """
+    Exports an xarray.DataTree to a compressed NetCDF4 file.
+    
+    Parameters
+    ----------
+    dt : xarray.DataTree
+        The DataTree containing the groups.
+    filename : str
+        The output file path.
+    complevel : int
+        Compression level from 1 (fastest) to 9 (smallest file size). 
+        Default is 5.
+    """
+    
+    # Iterate through every group/node in the DataTree
+    for node in dt.subtree:
+        # Iterate every data variable in the current group
+        for var_name, var_data in node.data_vars.items():
+            var_data.encoding.update({
+                'zlib': True, 
+                'complevel': complevel
+            })
+            
+    # Export the DataTree to a single NetCDF4 file
+    dt.to_netcdf(filename, engine="h5netcdf")
+
 
 from numba import njit
 @njit(fastmath=True)
@@ -155,6 +210,40 @@ def _numba_diffusion_loop(T, kappa, H, c_cap, dx, dz, dt, num_steps, cond):
         T = np.where(cond, T_new, T)
             
     return T
+
+def _Druker_Prager_YS(c:float, Phi:float, P:float):
+    '''
+    Gives the plastic Yield Stress (in Pa) according to the Druker-Prager criterion:
+
+    Tau_yield = c * cos(phi) + P * sin(phi)
+
+    where c if the internal cohesion (in Pa), phi is the internal angle of friction (in degrees), 
+    and P is the pressure (in Pa).
+    '''
+    rad = np.pi/180
+    return c * np.cos(Phi*rad) + P * np.sin(Phi*rad)
+
+def _Byerlee_law_YS(c:float, mu:float, P:float):
+    '''
+    Gives the plastic Yield Stress (in Pa) according to the Byerlee Law:
+
+    Tau_yield = c + mu * P
+
+    where c if the internal cohesion (in Pa), mu is the friction coefficient (dimensionless), 
+    and P is the pressure (in Pa).
+    '''
+    return c + mu * P
+
+def _visc_dislocation_creep(strain_rate:float, A:float, C:float, n:float, Q:float, V:float, P:float, R:float, T:float):
+    '''
+    Return the viscosity of a deslocation creep flow for a given strain rate. 
+    
+    It is calculated using an Arrhenius-type constitutive equation implemented in mandyoc:
+        
+        https://ggciag.github.io/mandyoc/files/implementation.html#rheology
+    '''
+
+    return C * A**(-1./n) * strain_rate**((1.0-n)/n)*np.exp((Q + V*P)/(n*R*T))
 
 #====== OLD/DEPRECATED FUNCTIONS ======
 
