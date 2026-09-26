@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tapioca-mandyoc"  
-version = "0.5.0"
+version = "0.5.5"
 description = "Output management and post-processing for Mandyoc geodynamic models based on xarray and DataTrees."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,7 +30,6 @@ dependencies = [
     "h5py",
     "h5netcdf",     
     "shapely>=2.1.2",
-    "astropy",
     "numba",
     "dask"
 ]
