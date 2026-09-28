@@ -14,6 +14,8 @@ using StatsBase
 global AIR_DENSITY_THRESHOLD = -999
 global LITHOLOGY_DATATYPE = Int8
 global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
+global CHUNKS = 4
+global dfllevel = 7 # compression level 1-9
 
 global UNITS =Dict{String,String}(
     "x"=>"m",
@@ -33,7 +35,8 @@ global UNITS =Dict{String,String}(
     "thermal_diffusivity"=>"m2/s",
     "Phi"=>"dimensionless",
     "dPhi"=>"1/s",  # Need to confirm
-    "X_depletion"=>"dimensionless"
+    "X_depletion"=>"dimensionless",
+    "lithology"=>"ID",
 )
 
 global DTYPES =Dict{String,DataType}(
@@ -54,7 +57,14 @@ global DTYPES =Dict{String,DataType}(
     "thermal_diffusivity"=>Float64,
     "Phi"=>Float64,
     "dPhi"=>Float64,  # Need to confirm
-    "X_depletion"=>Float64
+    "X_depletion"=>Float64,
+    "lithology"=>LITHOLOGY_DATATYPE,
+)
+
+# Useful for non dimensional scenarios
+global SCALE_FACTOR = Dict{String,Number}(
+
+
 )
 
 struct mesh2D 
@@ -146,143 +156,168 @@ function read_time(step::Integer)::Float64
     end
 end
 
+# Create the netcdf for the original mesh
+function create_nc(variable::String,scen::MandyocScenario, mesh::mesh2D)
+
+    Nx, Nz = mesh.Nx, mesh.Nz
+    Lx, Lz = mesh.Lx, mesh.Lz
+    times, steps = scen.times, scen.steps
+
+    nc_fname = "$(variable).nc"
+    
+    if variable == "lithology"
+        Nx = (Nx-1)*5 + 1
+        Nz = (Nz-1)*5 + 1
+    end
+
+    x_coords = DTYPES["x"].(range(0.0f0, Lx, length=Nx))
+    z_coords = DTYPES["z"].(range(-Lz, 0.0f0, length=Nz))
+    
+    num_steps = length(steps)
+    vardtype = DTYPES[variable]
+
+    Dataset(nc_fname,"c") do ds #criar o arquivo nc
+
+        defDim(ds,"time",num_steps)
+        defVar(ds,"time", times, ("time",),
+        attrib=Dict("units"=>UNITS["time"],"long_name"=>"time","axis"=>"T"),
+                                                                deflatelevel=dfllevel, shuffle=true)
+        
+        defVar(ds,"step", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"step"),
+                deflatelevel=dfllevel, shuffle=true)
+        ds["step"][:] = steps
+
+        if variable == "surface"
+            sx_sample,_ = read_data("surface", 0, mesh, DTYPES["surface"], veloc=false, surface=true)
+            Nxs = size(sx_sample)[1]
+            surf_x = DTYPES["x"].( range(0.0f0, Lx, length=Nxs) )
+            defDim(ds,"x",Nxs)
+            defVar(ds,"x",surf_x,("x",),attrib=Dict("units"=>UNITS["x"],"long_name"=>"x","axis" => "X"), 
+                                                                deflatelevel=dfllevel, shuffle=true)
+            
+            defVar(ds, variable, vardtype, ("x", "time"),
+                attrib=Dict("long_name"=>variable, "units"=>get(UNITS, variable, "-")),
+                deflatelevel=dfllevel, shuffle=true)
+        else
+            defDim(ds,"x",Nx)
+            defDim(ds,"z",Nz)
+
+            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>UNITS["x"],"long_name"=>"x","axis" => "X"),
+                                                                    deflatelevel=dfllevel, shuffle=true,
+                                                                    )
+            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>UNITS["z"],"long_name"=>"z","axis"=>"Z"),
+                                                                    deflatelevel=dfllevel, shuffle=true)
+            
+            if variable == "velocity"
+                defVar(ds,"vx",vardtype,("x","z","time"),attrib=Dict("units"=>UNITS[variable],
+                                                                    "long_name"=>"vx"),
+                                                                    deflatelevel=dfllevel, shuffle=true)
+                
+                defVar(ds,"vz",vardtype,("x","z","time"),attrib=Dict("units"=>UNITS[variable],
+                                                                    "long_name"=>"vz",),
+                                                                    deflatelevel=dfllevel, shuffle=true)
+            
+            else 
+                defVar(ds, variable, vardtype, ("x", "z", "time"),
+                attrib=Dict(
+                    "long_name"=>variable,
+                    "units"=>get(UNITS, variable, "-")
+                ),
+                deflatelevel=dfllevel, shuffle=true)
+            end
+        end
+    end
+end
+
 function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     nc_fname = "$variable.nc"
     Nx = mesh.Nx
     Nz = mesh.Nz
     Lx = mesh.Lx
     Lz = mesh.Lz
-
-    dtypes = scen.datatypes
-    vtype = dtypes[variable]
-    x_coords = dtypes["x"].(range(0.0f0, Lx, length=Nx))
-    z_coords = dtypes["z"].(range(-Lz, 0.0f0, length=Nz))
-
     steps = scen.steps
     times = scen.times
+    vardtype = DTYPES[variable]
     num_steps = length(steps)
-
-    units = scen.units
-    
-    dfllevel::Int8 = 7 # compression level 1-9
-
 
     veloc = (variable == "velocity")
     surface = (variable == "surface")
     
-    local buffer_vx, buffer_vz, buffer_var, buffer_surf, surface_nx, surface_x_coords
+    # Create the NC file
+    create_nc(variable,scen,mesh)
     
-    if surface
-        sx_sample,_ = read_data("surface", 0, mesh ,dtypes["surface"], veloc=false, surface=true)
-        surface_nx = size(sx_sample)[1]
-        surface_x_coords = dtypes["x"].( range(0.0f0, Lx, length=surface_nx) )
-		buffer_surf = zeros(dtypes["surface"], surface_nx, num_steps)
+    # Iterate chunks -> open NC file
+    chunk_size = ceil(Int, num_steps / CHUNKS) # Define amount of steps per chunk
+    step_chunks = collect(Iterators.partition(1:num_steps, chunk_size)) # Partitions the indices safely
 
-    elseif veloc
-        buffer_vx = zeros(dtypes["velocity"], Nx, Nz, num_steps)
-        buffer_vz = zeros(dtypes["velocity"], Nx, Nz, num_steps)
-    else
-        buffer_var = zeros(vtype, Nx, Nz, num_steps)
-    end
-    
-    #Multithreading processing
-    progress_counter = Threads.Atomic{Int}(0)
-    start_time = time()
-    
-    @threads for i in eachindex(steps)
-        step = steps[i]
+    for (chunk_idx, indices) in enumerate(step_chunks)
+        sub_steps = steps[indices]
+        len_chunk = length(sub_steps) 
+        println("Running chunk $chunk_idx/$CHUNKS - Steps $(sub_steps[1]) to $(sub_steps[end])")
+        
+        # Allocate buffers just for this chunk
+        local buffer_vx, buffer_vz, buffer_var, buffer_surf
+        if surface
+            sx_sample, _ = read_data("surface", sub_steps[1], mesh, DTYPES["surface"], veloc=false, surface=true)
+            buffer_surf = zeros(DTYPES["surface"], size(sx_sample)[1], len_chunk)
+        elseif veloc
+            buffer_vx = zeros(DTYPES["velocity"], Nx, Nz, len_chunk)
+            buffer_vz = zeros(DTYPES["velocity"], Nx, Nz, len_chunk)
+        else
+            buffer_var = zeros(vardtype, Nx, Nz, len_chunk)
+        end
 
-        data = read_data(variable,step,mesh,vtype,veloc=veloc,surface=surface)
-        if data !== nothing
+        progress_counter = Threads.Atomic{Int}(0)
+        start_time = time()
+        
+        @threads for i in eachindex(sub_steps)
+            step = sub_steps[i]
+            data = read_data(variable, step, mesh, vardtype, veloc=veloc, surface=surface)
             
-	    if veloc
-                dens = read_data("density",step,mesh,dtypes["density"],veloc=false, surface=false)
-                vx,vz = data
-                vx[dens.<AIR_DENSITY_THRESHOLD] .= 0
-                vz[dens.<AIR_DENSITY_THRESHOLD] .= 0
-		        buffer_vx[:, :, i] = vx'
-                buffer_vz[:, :, i] = vz'
-                
-            elseif surface
-
-                sx,sy = data
-
-                buffer_surf[:, i] = sy
-            else
-                dens = read_data("density",step,mesh,dtypes["density"],veloc=false, surface=false)
-                data[dens.<AIR_DENSITY_THRESHOLD] .= 0
-                buffer_var[:, :, i] = data'
-            end
-	    
+            if data !== nothing
+                if veloc
+                    dens = read_data("density", step, mesh, DTYPES["density"], veloc=false, surface=false)
+                    vx, vz = data
+                    vx[dens .< AIR_DENSITY_THRESHOLD] .= 0
+                    vz[dens .< AIR_DENSITY_THRESHOLD] .= 0
+                    buffer_vx[:, :, i] = vx'
+                    buffer_vz[:, :, i] = vz'
+                elseif surface
+                    _, sy = data
+                    buffer_surf[:, i] = sy
+                else
+                    dens = read_data("density", step, mesh, DTYPES["density"], veloc=false, surface=false)
+                    data[dens .< AIR_DENSITY_THRESHOLD] .= 0
+                    buffer_var[:, :, i] = data'
+                end
             else
                 @warn "No data found for $(variable)_$(step).txt at step $step"
             end
-        
-        #Tracker
-			Threads.atomic_add!(progress_counter, 1)
-			if progress_counter[] % 10 == 0
-				speed = (time() - start_time) / progress_counter[]
-				@info "[$variable] Progress: $(progress_counter[])/$num_steps | Speed: $(round(speed, digits=2))s/step"
-			end
-        
+            
+            Threads.atomic_add!(progress_counter, 1)
+            if progress_counter[] % 10 == 0
+                speed = (time() - start_time) / progress_counter[]
+                @info "[$variable] Progress (Chunk $chunk_idx): $(progress_counter[])/$len_chunk | Speed: $(round(speed, digits=2))s/step"
+            end
         end
-    
-    Dataset(nc_fname,"c") do ds #criar o arquivo nc
-
-        defDim(ds,"time",num_steps)
-        defVar(ds,"time", times, ("time",),
-        attrib=Dict("units"=>units["time"],"long_name"=>"time","axis"=>"T"),
-                                                                deflatelevel=dfllevel, shuffle=true)
         
-        defVar(ds,"steps", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"steps"),
-                deflatelevel=dfllevel, shuffle=true)
-        ds["steps"][:] = steps
-
-        if veloc
-            defDim(ds,"x",Nx)
-            defDim(ds,"z",Nz)
-
-            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x","axis" => "X"),
-                                                                deflatelevel=dfllevel, shuffle=true,
-                                                                )
-            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>units["z"],"long_name"=>"z","axis"=>"Z"),
-                                                                deflatelevel=dfllevel, shuffle=true)
-            
-            defVar(ds,"vx",vtype,("x","z","time"),attrib=Dict("units"=>units[variable],
-                                                                "long_name"=>"vx"),
-                                                                deflatelevel=dfllevel, shuffle=true)
-            
-            defVar(ds,"vz",vtype,("x","z","time"),attrib=Dict("units"=>units[variable],
-                                                                "long_name"=>"vz",),
-                                                               deflatelevel=dfllevel, shuffle=true)
-            ds["vx"][:, :, :] = buffer_vx
-            ds["vz"][:, :, :] = buffer_vz
-            
-        elseif surface
-            defDim(ds,"x",surface_nx)
-            defVar(ds,"x",surface_x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x","axis" => "X"), 
-            													deflatelevel=dfllevel, shuffle=true)
-
-            defVar(ds,variable,vtype,("x","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
-                                                                deflatelevel=dfllevel, shuffle=true)
-            ds[variable][:, :] = buffer_surf
-            
-        else
-            defDim(ds,"x",Nx)
-            defDim(ds,"z",Nz)
-            defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>units["x"],"long_name"=>"x","axis" => "X"), 
-            													deflatelevel=dfllevel,shuffle=true)
-            defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>units["z"],"long_name"=>"z","axis"=>"Z"),
-                                                                deflatelevel=dfllevel,shuffle=true)
-            defVar(ds,variable,vtype,("x","z","time"),attrib=Dict("units"=>units[variable],"long_name"=>variable),
-                                                                deflatelevel=dfllevel, shuffle=true)
-                                                                
-            ds[variable][:, :, :] = buffer_var
+        # Append chunk data to NC file
+        Dataset(nc_fname, "a") do ds
+            if veloc
+                ds["vx"][:, :, indices] = buffer_vx
+                ds["vz"][:, :, indices] = buffer_vz
+            elseif surface
+                ds["surface"][:, indices] = buffer_surf
+            else
+                ds[variable][:, :, indices] = buffer_var
+            end
         end
-	
         
-        println("\nSaved to $nc_fname")
+        # Free chunk memory
+        buffer_vx = buffer_vz = buffer_var = buffer_surf = nothing
+        GC.gc()
     end
+    println("Saved to $nc_fname\n---------------")
 end
 
 # ======= Functions to convert Lithology =======
@@ -319,93 +354,72 @@ function replace_negatives_with_neighbors!(mat::Matrix)
     return result
 end
 
-function convert_litho_to_nc(scen::MandyocScenario,mesh::mesh2D,cores::Integer)
-    
+function convert_litho_to_nc(scen::MandyocScenario, mesh::mesh2D, cores::Integer)
     nc_fname = "lithology.nc"
     Nx, Nz = mesh.Nx, mesh.Nz
     Lx, Lz = mesh.Lx, mesh.Lz
-    dtypes = scen.datatypes
     steps = scen.steps
     times = scen.times
     ncores = cores
-
     num_steps = length(steps)
-    dfllevel::Int8 = 6 #compression level 1-9
     
     # Upscaled mesh for lithology
-    Nxl = (Nx-1)*5 + 1
-    Nzl = (Nz-1)*5 + 1
+    Nxl = (Nx - 1) * 5 + 1
+    Nzl = (Nz - 1) * 5 + 1
     
-    full_buffer = zeros(Integer, Nxl, Nzl, num_steps)
-    
+    create_nc("lithology", scen, mesh)
 
-	progress_counter = Threads.Atomic{Int}(0)
-	total_steps = length(steps)
-	start_time = time() # Start global timer
-	
-	@threads for i in eachindex(steps)
-	    step = steps[i]
+    chunk_size = ceil(Int, num_steps / CHUNKS)
+    step_chunks = collect(Iterators.partition(1:num_steps, chunk_size))
 
-		litho_mesh = fill(Integer(-1), Nzl, Nxl)
-		
-	    for core in 0:(ncores-1)
-		fpath=joinpath("lithos","litho_$(step)_$core.txt")
-			if isfile(fpath)
-				x_core, z_core, litho_core = read_litho_file(fpath)
-				for k in eachindex(x_core)
-				    litho_mesh[z_core[k] + 1, x_core[k] + 1] = litho_core[k]
-				end
-			end
-	    end
+    start_time_global = time()
 
-	    # Fill empty cells
-	    replace_negatives_with_neighbors!(litho_mesh)
-	    #litho_mesh .= get.(Ref(litho_dict), litho_mesh, litho_mesh) # Deprecated = map weak seed values
+    for (chunk_idx, indices) in enumerate(step_chunks)
+        sub_steps = steps[indices]
+        len_chunk = length(sub_steps) 
+        println("Running chunk $chunk_idx/$CHUNKS - Steps $(sub_steps[1]) to $(sub_steps[end])")
 
-	    # Store finished slice into our 3D buffer
-	    full_buffer[:, :, i] = reverse(litho_mesh, dims=1)'
-	    Threads.atomic_add!(progress_counter, 1)
-	    if progress_counter[] % 10 == 0
-        @info "Progress: $(progress_counter[]) / $total_steps ($(round(progress_counter[]/total_steps*100, digits=1))%)"
-    	end
-	end
-
-    total_elapsed = time() - start_time
-    @info "Finished! Total time: $(round(total_elapsed / 60, digits=2)) minutes."
-    
-    x_coords_litho = dtypes["x"].(range(0.0f0, Lx, length=Nxl))
-    z_coords_litho = dtypes["z"].(range(-Lz, 0.0f0, length=Nzl))
-    
-    # Creating netcdf file
-    Dataset(nc_fname, "c") do ds
+        buffer = zeros(LITHOLOGY_DATATYPE, Nxl, Nzl, len_chunk)
         
-        defDim(ds, "time", num_steps)
-        defDim(ds, "x", Nxl)
-        defDim(ds, "z", Nzl)
+        progress_counter = Threads.Atomic{Int}(0)
+        total_steps = length(steps)
 
-        defVar(ds,"steps", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"steps"),
-                    deflatelevel=dfllevel, shuffle=true)
-        ds["steps"][:] = steps
+        @threads for i in eachindex(sub_steps)
+            step = sub_steps[i]
+             # LITHOLOGY_DATATYPE can't be unssigned if -1 is the fill value!
+            litho_mesh = fill(LITHOLOGY_DATATYPE(-1), Nzl, Nxl)
+            
+            for core in 0:(ncores-1)
+                fpath = joinpath("lithos", "litho_$(step)_$core.txt")
+                if isfile(fpath)
+                    x_core, z_core, litho_core = read_litho_file(fpath)
+                    for k in eachindex(x_core)
+                        litho_mesh[z_core[k] + 1, x_core[k] + 1] = litho_core[k]
+                    end
+                end
+            end
 
-        defVar(ds, "time", dtypes["time"].(times), ("time",), 
-            attrib=Dict("units"=>"Myr", "long_name"=>"time","axis"=>"T"),
-            deflatelevel=dfllevel, shuffle=true)
-        defVar(ds, "x", x_coords_litho, ("x",), 
-            attrib=Dict("units"=>"m", "long_name"=>"x", "axis"=>"X"),
-            deflatelevel=dfllevel, shuffle=true)
-        defVar(ds, "z", z_coords_litho, ("z",), 
-            attrib=Dict("units"=>"m", "long_name"=>"z", "axis"=>"Z"),
-            deflatelevel=dfllevel, shuffle=true)
+            replace_negatives_with_neighbors!(litho_mesh)
+
+            buffer[:, :, i] = reverse(litho_mesh, dims=1)'
+            
+            Threads.atomic_add!(progress_counter, 1)
+            if progress_counter[] % 10 == 0
+                @info "Progress: $(progress_counter[]) / $len_chunk (Chunk $chunk_idx)"
+            end
+        end 
+
+        Dataset(nc_fname, "a") do ds
+            ds["lithology"][:, :, indices] = buffer
+        end
         
-        defVar(ds, "lithology", LITHOLOGY_DATATYPE, ("x", "z", "time"),
-            attrib=Dict(
-                "long_name"=>"Lithology",
-            ),
-            deflatelevel=dfllevel, shuffle=true)
-
-        ds["lithology"][:, :, :] = LITHOLOGY_DATATYPE.(full_buffer)
-        println("\nSaved to $nc_fname")
+        # cleaning the ram
+        buffer = nothing
+        GC.gc()
     end
+    
+    total_elapsed = time() - start_time_global
+    @info "Finished! Total time: $(round(total_elapsed / 60, digits=2)) minutes."
 end
 
 function build_scenario(params::Dict)
