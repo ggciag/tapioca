@@ -1,21 +1,16 @@
-# Write by Joao Bueno - Jun. 2026
-# This script converts text files from Mandyoc outputs into netcdf4 files.
-# Outputs must be organized in folders (check `0_organize_outputs.sh`)
+# Written by Joao Bueno - Jun. 2026
+# Updated by Joao Bueno - Sep. 2026
 
+# This script converts text files from Mandyoc outputs into optimized netcdf4 files.
+# Outputs must be organized in sub-folders (check `0_organize_outputs.sh`)
 
-using NCDatasets
-using Glob
-using CSV
-using Printf
-using DataFrames
-using Base.Threads
-using StatsBase
+# ======= GLOBAL PARAMETERS =======
 
-global AIR_DENSITY_THRESHOLD = -999
-global LITHOLOGY_DATATYPE = Int8
 global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","heat"]
-global CHUNKS = 5
-global dfllevel = 7 # compression level 1-9
+global AIR_DENSITY_THRESHOLD = -999  # set it to negative to get the raw data 
+global LITHOLOGY_DATATYPE = Int8     # set it to Int16 if you have more than 127 lithologies
+global CHUNKS = 2                    # set it to optimize ram usage and/or processing time
+global dfllevel = 7                  # set it to optimize the file compression (from 1 to 9)
 
 global UNITS =Dict{String,String}(
     "x"=>"m",
@@ -66,6 +61,16 @@ global SCALE_FACTOR = Dict{String,Number}(
 
 
 )
+
+# ======= FUNCTIONS AND STRUCTS =======
+
+using NCDatasets
+using Glob
+using CSV
+using Printf
+using DataFrames
+using Base.Threads
+using StatsBase
 
 struct mesh2D 
     Nx::Int
@@ -156,7 +161,7 @@ function read_time(step::Integer)::Float64
     end
 end
 
-# Create the netcdf for the original mesh
+
 function create_nc(variable::String,scen::MandyocScenario, mesh::mesh2D)
 
     Nx, Nz = mesh.Nx, mesh.Nz
@@ -322,7 +327,7 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
     println("Saved to $nc_fname\n---------------")
 end
 
-# ======= Functions to convert Lithology =======
+# ======= Functions to convert lithology =======
 
 function read_litho_file(fpath::String)
     # Read lithology file and return x, z, lith
@@ -428,6 +433,8 @@ function convert_litho_to_nc(scen::MandyocScenario, mesh::mesh2D, cores::Integer
     @info "Finished! Total time: $(round(total_elapsed / 60, digits=2)) minutes."
 end
 
+# ======= FUNCTIONS TO INITIATE THE STRUCTS =======
+
 function build_scenario(params::Dict)
 
     dims = parse(Int, get(params, "dimensions", "2")) # if the model is 2d or 3d
@@ -462,14 +469,16 @@ function build_scenario(params::Dict)
     return MandyocScenario(dims, steps, times, thick_air, UNITS, DTYPES), mesh
 end
 
+# ======= MAIN =======
+
 function main()
     
 data_dir = ARGS[end] # Scenario directory
 cd(data_dir)
 
-# Basic parameters
 params = read_param("param.txt")
 
+# ======= checking additional outputs =======
 if (get(params,"sp_surface_tracking", "False") == "True") || (get(params,"sp_surface_processes", "False") == "True")
     push!(VARIABLES, "surface")
     println("Surface was tracked.")
@@ -486,6 +495,7 @@ if get(params, "export_thermal_diffusivity", "False") == "True"
     push!(VARIABLES, "thermal_diffusivity")
     println("Thermal diffusivity (kappa) was exported.")
 end
+# ==============
 
 scen, mesh = build_scenario(params)
 
@@ -494,7 +504,7 @@ for var in unique(VARIABLES)
     converter(var,scen,mesh)
 end
 
-println("All variables were converted to NetCDF4")
+# println("All variables were converted to NetCDF4")
 
 if get(params, "export_lithology", "False") == "True"
     println("Lithology grid was exported.")
@@ -504,7 +514,7 @@ if get(params, "export_lithology", "False") == "True"
     println("Lithology was converted to NetCDF4")
 end
 
-
+# ======= basic verbose in the end =======
 println("Finished")
 println("Variables converted: $(join(VARIABLES,"; "))")
 println("Compression level: $(dfllevel)")
@@ -514,5 +524,6 @@ println(join(DTYPES,";\n"))
 println("-"^20)
 
 end
+# ==============
 
 main()
