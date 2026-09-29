@@ -23,17 +23,17 @@ The user can specify a number of chuncks to process the outputs using `CHUNKS`. 
 
 The amount of necessary RAM can be estimated using the velocity and lithology datasets. Velocity is the most memory-intensive standard variable because it requires two 8 bytes arrays (vx and vz), and reading it also requires loading the density array (4 bytes) into memory simultaneously. 
 
-- Buffer Memory: $\text{Nx} \times \text{Nz} \times \text{Steps\_per\_Chunk} \times 16 \text{ bytes}$
-- Thread Overhead: $\text{Active\_Threads} \times \text{Nx} \times \text{Nz} \times 20 \text{ bytes}$ (Loading vx, vz, and density into the thread)
-- Total: $\text{Max RAM (Velocity)} = \frac{\text{Nx} \times \text{Nz}}{1024^2} \times (16 \times \text{Steps\_per\_Chunk} + 20 \times \text{Active\_Threads})$ MB.
+- Buffer Memory: $\text{Nx} \times \text{Nz} \times \text{Steps per Chunk} \times 16 \text{ bytes}$
+- Thread Overhead: $\text{Active Threads} \times \text{Nx} \times \text{Nz} \times 20 \text{ bytes}$ (Loading vx, vz, and density into the thread)
+- Total: $\text{Max RAM (Velocity)} = \frac{\text{Nx} \times \text{Nz}}{1024^2} \times (16 \times \text{Steps per Chunk} + 20 \times \text{Active Threads})$ MB.
 
 Lithology uses 1 byte by default (Int8) which is very light, but the output is upscaled by a factor of 5 in both axis. This means the lithology grid has roughly 25 times more elements than your original mesh. 
 - Upscaled Elements: $\text{Nxl} \times \text{Nzl} \approx 25 \times (\text{Nx} \times \text{Nz})$
-- Buffer Memory: $\text{Nxl} \times \text{Nzl} \times \text{Steps\_per\_Chunk} \times 1 \text{ byte}$
-- Thread Overhead: $\text{Active\_Threads} \times \text{Nxl} \times \text{Nzl} \times 1 \text{ byte}$ (Plus a small CSV parsing overhead per thread)
-- Total: $\text{Max RAM (Lithology)} = \frac{\text{Nxl} \times \text{Nzl}}{1024^2} \times (\text{Steps\_per\_Chunk} + \text{Active\_Threads})$ MB.
+- Buffer Memory: $\text{Nxl} \times \text{Nzl} \times \text{Steps per Chunk} \times 1 \text{ byte}$
+- Thread Overhead: $\text{Active Threads} \times \text{Nxl} \times \text{Nzl} \times 1 \text{ byte}$ (Plus a small CSV parsing overhead per thread)
+- Total: $\text{Max RAM (Lithology)} = \frac{\text{Nxl} \times \text{Nzl}}{1024^2} \times (\text{Steps per Chunk} + \text{Active Threads})$ MB.
 
-In which $\text{Steps\_per\_Chunk} = \text{Total\_Steps} / \text{CHUNKS}$. 
+In which $\text{Steps per Chunk} = \text{Total Steps} / \text{CHUNKS}$. 
 
 A practical amount of necessary RAM for each chunk is: $1.25 \times \max{R_{\text{litho}},R_{\text{veloc}}}$. Note that the increasing of the chunks also increases the processing time due to the writing data. For most cases (1201 x 301 elements with ~320 time steps), 2 chunks brings an optimized memory usage and a good time performance. 
 
