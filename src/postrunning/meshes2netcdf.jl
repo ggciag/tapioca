@@ -13,8 +13,8 @@ using StatsBase
 
 global AIR_DENSITY_THRESHOLD = -999
 global LITHOLOGY_DATATYPE = Int8
-global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","surface","heat"]
-global CHUNKS = 4
+global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","heat"]
+global CHUNKS = 5
 global dfllevel = 7 # compression level 1-9
 
 global UNITS =Dict{String,String}(
@@ -297,7 +297,9 @@ function converter(variable::String, scen::MandyocScenario, mesh::mesh2D)
             Threads.atomic_add!(progress_counter, 1)
             if progress_counter[] % 10 == 0
                 speed = (time() - start_time) / progress_counter[]
-                @info "[$variable] Progress (Chunk $chunk_idx): $(progress_counter[])/$len_chunk | Speed: $(round(speed, digits=2))s/step"
+                active_ram = round(Base.gc_live_bytes() / 1000^2, digits=1)
+                ram_peak = round(Sys.maxrss() / 1000^2, digits=1)
+                @info "[$variable] Progress: $(progress_counter[])/$len_chunk | Speed: $(round(speed, digits=2))s/step | Active RAM: $(active_ram)MB | RAM peak: $(ram_peak)MB"
             end
         end
         
@@ -380,9 +382,10 @@ function convert_litho_to_nc(scen::MandyocScenario, mesh::mesh2D, cores::Integer
         println("Running chunk $chunk_idx/$CHUNKS - Steps $(sub_steps[1]) to $(sub_steps[end])")
 
         buffer = zeros(LITHOLOGY_DATATYPE, Nxl, Nzl, len_chunk)
-        
-        progress_counter = Threads.Atomic{Int}(0)
         total_steps = length(steps)
+
+        progress_counter = Threads.Atomic{Int}(0)
+        chunk_start_time = time()
 
         @threads for i in eachindex(sub_steps)
             step = sub_steps[i]
@@ -405,7 +408,10 @@ function convert_litho_to_nc(scen::MandyocScenario, mesh::mesh2D, cores::Integer
             
             Threads.atomic_add!(progress_counter, 1)
             if progress_counter[] % 10 == 0
-                @info "Progress: $(progress_counter[]) / $len_chunk (Chunk $chunk_idx)"
+                speed = (time() - chunk_start_time) / progress_counter[]
+                ram_peak = round(Sys.maxrss() / 1000^2, digits=1)
+                active_ram = round(Base.gc_live_bytes() / 1000^2, digits=1)
+                @info "[lithology] Progress: $(progress_counter[])/$len_chunk | Speed: $(round(speed, digits=2))s/step | Active RAM: $(active_ram)MB | RAM peak: $(ram_peak)MB"
             end
         end 
 
@@ -464,15 +470,21 @@ cd(data_dir)
 # Basic parameters
 params = read_param("param.txt")
 
+if (get(params,"sp_surface_tracking", "False") == "True") || (get(params,"sp_surface_processes", "False") == "True")
+    push!(VARIABLES, "surface")
+    println("Surface was tracked.")
+end
+
 if get(params, "magmatism", "off") == "on"
     push!(VARIABLES, "Phi")
     push!(VARIABLES, "dPhi")
     push!(VARIABLES, "X_depletion")
-    println("magmatism=on")
+    println("Magmatism was on.")
 end
 
 if get(params, "export_thermal_diffusivity", "False") == "True"
     push!(VARIABLES, "thermal_diffusivity")
+    println("Thermal diffusivity (kappa) was exported.")
 end
 
 scen, mesh = build_scenario(params)
@@ -485,7 +497,7 @@ end
 println("All variables were converted to NetCDF4")
 
 if get(params, "export_lithology", "False") == "True"
-    println("Exporting lithology")
+    println("Lithology grid was exported.")
     ncores::Int = size(glob(joinpath("lithos","litho_0_*.txt")))[1]
     println("$ncores cores were used in this model.")
     convert_litho_to_nc(scen,mesh, ncores)
@@ -494,6 +506,12 @@ end
 
 
 println("Finished")
+println("Variables converted: $(join(VARIABLES,"; "))")
+println("Compression level: $(dfllevel)")
+println("-"^20)
+println("Types:")
+println(join(DTYPES,";\n"))
+println("-"^20)
 
 end
 
