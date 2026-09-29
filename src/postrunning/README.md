@@ -36,3 +36,13 @@ Lithology uses 1 byte by default (Int8) which is very light, but the output is u
 In which $\text{Steps\_per\_Chunk} = \text{Total\_Steps} / \text{CHUNKS}$. 
 
 A practical amount of necessary RAM for each chunk is: $1.25 \times \max{R_{\text{litho}},R_{\text{veloc}}}$. Note that the increasing of the chunks also increases the processing time due to the writing data. For most cases (1201 x 301 elements with ~320 time steps), 2 chunks brings an optimized memory usage and a good time performance. 
+
+## Lagrangian Particles (Markers)
+
+The particles2netcdf.jl script converts Lagrangian markers into a NetCDF file. The output is structured with `(id, time)` dimensions to store `x`, `z`, and `lithology` variables, following the CF-Conventions for trajectory data (where each particle maintains a unique ID over time). The basic usage is:
+
+```bash
+srun -N 1 -c THREADS --mem=RAM julia -t THREADS $PATH_TO_TAPIOCA/tapioca/src/postrunning/particles2netcdf.jl $SCENARIO_PATH REFERENCE_TIME_STEP
+```
+
+The `REFERENCE_TIME_STEP` is the time step that will be used to get the required IDs. If this is the final step of the simulation, only the particles within the domain at the end will be tracked. On the other hand, if it is 0, all the initial particles will be tracked.

@@ -7,10 +7,10 @@
 # ======= GLOBAL PARAMETERS =======
 
 global VARIABLES = ["density", "viscosity", "pressure", "strain","strain_rate","temperature","velocity","heat"]
-global AIR_DENSITY_THRESHOLD = -999  # set it to negative to get the raw data 
-global LITHOLOGY_DATATYPE = Int8     # set it to Int16 if you have more than 127 lithologies
-global CHUNKS = 2                    # set it to optimize ram usage and/or processing time
-global dfllevel = 7                  # set it to optimize the file compression (from 1 to 9)
+const AIR_DENSITY_THRESHOLD = -999  # set it to negative to get the raw data 
+const LITHOLOGY_DATATYPE = Int8     # set it to Int16 if you have more than 127 lithologies
+const CHUNKS = 2                    # set it to optimize ram usage and/or processing time
+const DEFLATE_LEVEL = 7             # set it to optimize the file compression (from 1 to 9)
 
 global UNITS =Dict{String,String}(
     "x"=>"m",
@@ -42,7 +42,7 @@ global DTYPES =Dict{String,DataType}(
 
     "density"=>Float32,
     "viscosity"=>Float64,
-    "pressure"=>Float64,
+    "pressure"=>Float32,
     "strain"=>Float64,
     "strain_rate"=>Float64,
     "temperature"=>Float32,
@@ -186,10 +186,10 @@ function create_nc(variable::String,scen::MandyocScenario, mesh::mesh2D)
         defDim(ds,"time",num_steps)
         defVar(ds,"time", times, ("time",),
         attrib=Dict("units"=>UNITS["time"],"long_name"=>"time","axis"=>"T"),
-                                                                deflatelevel=dfllevel, shuffle=true)
+                                                                deflatelevel=DEFLATE_LEVEL, shuffle=true)
         
         defVar(ds,"step", Int32, ("time",), attrib=Dict("units"=>"","long_name"=>"step"),
-                deflatelevel=dfllevel, shuffle=true)
+                deflatelevel=DEFLATE_LEVEL, shuffle=true)
         ds["step"][:] = steps
 
         if variable == "surface"
@@ -198,29 +198,29 @@ function create_nc(variable::String,scen::MandyocScenario, mesh::mesh2D)
             surf_x = DTYPES["x"].( range(0.0f0, Lx, length=Nxs) )
             defDim(ds,"x",Nxs)
             defVar(ds,"x",surf_x,("x",),attrib=Dict("units"=>UNITS["x"],"long_name"=>"x","axis" => "X"), 
-                                                                deflatelevel=dfllevel, shuffle=true)
+                                                                deflatelevel=DEFLATE_LEVEL, shuffle=true)
             
             defVar(ds, variable, vardtype, ("x", "time"),
                 attrib=Dict("long_name"=>variable, "units"=>get(UNITS, variable, "-")),
-                deflatelevel=dfllevel, shuffle=true)
+                deflatelevel=DEFLATE_LEVEL, shuffle=true)
         else
             defDim(ds,"x",Nx)
             defDim(ds,"z",Nz)
 
             defVar(ds,"x",x_coords,("x",),attrib=Dict("units"=>UNITS["x"],"long_name"=>"x","axis" => "X"),
-                                                                    deflatelevel=dfllevel, shuffle=true,
+                                                                    deflatelevel=DEFLATE_LEVEL, shuffle=true,
                                                                     )
             defVar(ds,"z",z_coords,("z",),attrib=Dict("units"=>UNITS["z"],"long_name"=>"z","axis"=>"Z"),
-                                                                    deflatelevel=dfllevel, shuffle=true)
+                                                                    deflatelevel=DEFLATE_LEVEL, shuffle=true)
             
             if variable == "velocity"
                 defVar(ds,"vx",vardtype,("x","z","time"),attrib=Dict("units"=>UNITS[variable],
                                                                     "long_name"=>"vx"),
-                                                                    deflatelevel=dfllevel, shuffle=true)
+                                                                    deflatelevel=DEFLATE_LEVEL, shuffle=true)
                 
                 defVar(ds,"vz",vardtype,("x","z","time"),attrib=Dict("units"=>UNITS[variable],
                                                                     "long_name"=>"vz",),
-                                                                    deflatelevel=dfllevel, shuffle=true)
+                                                                    deflatelevel=DEFLATE_LEVEL, shuffle=true)
             
             else 
                 defVar(ds, variable, vardtype, ("x", "z", "time"),
@@ -228,7 +228,7 @@ function create_nc(variable::String,scen::MandyocScenario, mesh::mesh2D)
                     "long_name"=>variable,
                     "units"=>get(UNITS, variable, "-")
                 ),
-                deflatelevel=dfllevel, shuffle=true)
+                deflatelevel=DEFLATE_LEVEL, shuffle=true)
             end
         end
     end
@@ -517,7 +517,7 @@ end
 # ======= basic verbose in the end =======
 println("Finished")
 println("Variables converted: $(join(VARIABLES,"; "))")
-println("Compression level: $(dfllevel)")
+println("Compression level: $(DEFLATE_LEVEL)")
 println("-"^20)
 println("Types:")
 println(join(DTYPES,";\n"))
