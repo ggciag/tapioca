@@ -379,6 +379,8 @@ class MandyocScen:
             return None
             
         v = xr.open_dataset(file_path, chunks=chunks)
+        if 'step' in v.data_vars:
+            v = v.set_coords('step')
         
         if 'z' in v.coords:
             v = v.sortby('z')
@@ -444,13 +446,16 @@ class MandyocScen:
             return False
             
         particles = xr.open_dataset(file_path, chunks=chunks)
+        if "step" in particles.data_vars:
+            particles = particles.set_coords('step')
+        
         particles = particles.sel(time=slice(self.tlimits[0], self.tlimits[-1]))
         
-        if filter_air and 'layer' in particles.data_vars:
+        if filter_air and 'lithology' in particles.data_vars:
             if isinstance(air_layer, int): air = air_layer
-            else: air = int(particles.layer.max()) #future: find air layer by density?
+            else: air = int(particles.lithology.max()) #future: find air layer by density?
                 
-            cond = particles.layer != air
+            cond = particles.lithology != air
             particles = particles.where(cond)
             if self.verbose: print(f'Air particles filtered [{air}]')
             
@@ -569,9 +574,9 @@ class MandyocScen:
         return self
     
     
-    def selectParticles_bylayers(self, layers, tsel=None, selected_name='',selection_name=''):
+    def selectParticles_bylithology(self, lithologies, tsel=None, selected_name='',selection_name=''):
         '''
-        select particles by layer
+        select particles by lithologies
         '''
         
         paths, names,pts0 = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
@@ -581,7 +586,7 @@ class MandyocScen:
         if tsel is None: tsel = 0 # Future: to create a function to evaluate an automatic tsel
         
         pts = pts.sel(time=tsel, method='nearest')
-        cond = pts.layer.isin(layers).compute()
+        cond = pts.lithology.isin(lithologies).compute()
         ids =  pts.id.where(cond, drop=True).values
         
         self._apply_selection(ids, 
