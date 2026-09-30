@@ -1,6 +1,5 @@
 # Examples folder edition
-tests/example-continental-rift
-tests/building_scen.ipynb
+examples/building_scen.ipynb
 
 # Conda env test
 test_env.yml
