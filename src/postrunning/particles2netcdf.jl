@@ -114,7 +114,7 @@ function create_particles_nc(nc_fname::String, target_ids::Vector{Int32}, steps:
         defDim(ds, "time", num_steps)
 
         # 1D Coordinates
-        defVar(ds, "id", target_ids, ("ID",), attrib=Dict("long_name"=>"particle_id",
+        defVar(ds, "id", target_ids, ("id",), attrib=Dict("long_name"=>"particle_id",
                                                           "cf_role"   => "trajectory_id"), 
                                         deflatelevel=DEFLATE_LEVEL) 
 
@@ -197,7 +197,7 @@ function process_trajectories(nc_fname::String, steps::Vector{Int32}, target_ids
                 @inbounds for row in data
                     id = row.Column3
                     
-                    # Avoid OutOfBounds if a new ID appears 
+                    # Avoid OutOfBounds if a new id appears 
                     if id >= 0 && id < length(id_map)
                         idx = id_map[id + 1]
                         
