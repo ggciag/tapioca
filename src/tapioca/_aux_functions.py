@@ -6,9 +6,9 @@ import pandas as pd
 
 from pathlib import Path
 
-from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS
+from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARAMS_TYPES
 
-__all__ = ["read_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
+__all__ = ["read_params","evaluate_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
            "_numba_diffusion_loop",
            "_Druker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
 
@@ -44,10 +44,35 @@ def read_params(path_param:str)->dict:
             line = line.split('#')[0]
             line = line.replace(' ','')
             pv = line.split('=')
-            params_form[pv[0].lower()] = pv[1]
+            params_form[pv[0]] = PARAMS_TYPES[pv[0]](pv[1])
             ptemp = ptemp + line+'\n'
 
     return params_form
+
+def evaluate_params(param_file:str='', params_str:str='', **params_dict)->dict:
+    temp_param = {}
+
+    if len(param_file) > 1:
+        temp_param = read_params(param_file)
+        
+    elif len(params_str) > 1:
+        for line in params_str.split('\n'):
+            line = line.strip()
+
+            if len(line)==0:
+                continue
+            elif line[0] == "#":
+                continue
+
+            line = line.split('#')[0]
+            line = line.replace(' ','')
+            pv = line.split('=')
+            temp_param[pv[0]] = PARAMS_TYPES[pv[0]](pv[1])
+    else:
+        for k,v in params_dict.items():
+            temp_param.update({k:PARAMS_TYPES[k](v)})
+
+    return temp_param
 
 def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False) -> np.array:
     '''

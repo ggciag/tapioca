@@ -4,13 +4,14 @@ from shapely.geometry import Polygon,LineString
 from shapely import to_ragged_array
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
+from types import MappingProxyType
 
 import numpy as np
 import xarray as xr
 from xarray import DataTree
 
-from ._variables import VARS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from ._aux_functions import read_params, ensure_directory_exists, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
+from ._variables import VARS_TYPES, PARAMS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
+from ._aux_functions import read_params, evaluate_params, ensure_directory_exists, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
 
 #Mandyoc Scenario class
 class MandyocScen:
@@ -18,8 +19,8 @@ class MandyocScen:
     Core data manager for Mandyoc simulations (results).
 
     This class parses output directories, reads model parameters, and constructs 
-    a unified DataTree. The classes alsos contains the params.txt stored as a
-    frozen dictionary. 
+    a unified DataTree. The classes alsos contains the scenarios param.txt 
+    [future implementations will read temporal conditions]. 
     
     It aligns meshes (common variables), upscaled lithology, surface topography,
     and Lagrangian particles into a single navigable object. 
@@ -1689,14 +1690,54 @@ class MandyocBuilder:
 
         return self
     
-    def set_params(self, params_str:str='', **kwargs):
+    def set_params(self, param_file:str='', params_str:str='', **params_dict):
         """
-        Set parameters for the model
+        Set parameters for the scenario. nx, nz, lx, and lz cannot be set.
+        The parameters must be set after the interfaces creation.
+        
+        Parameters
+        ----------
+        param_file:str, optional
+            File `param.txt` with the parameters.
+
+        params_str:str, optional
+            Continuous text with the parameters. 
+        
+        params_dict:dict, keyarguments
+            Dictionary with the parameters
         """
 
-        # create a function to evaluate params!
-        self.params = kwargs
+
+        temp_param = {'nx':self.Nx,
+                      'nz':self.Nz,
+                      'lx':self.Lx,
+                      'lz':-self.Lz,
+                      'dimensions':self.dimensions,
+                      'n_interfaces':len(self.DTree.interfaces)-1
+                    }
         
+        if self.dimensions == 3:
+            temp_param['ny'] = self.Ny
+            temp_param['ly'] = self.Ly
+        
+
+        fixed_parameters = list(temp_param.keys())
+        read_input = evaluate_params(param_file, params_str, **params_dict)
+
+        for k,v in read_input.items():
+            if k in fixed_parameters:
+                self._print_verbose(f"{k} was already set in the builder.")
+                continue
+
+            elif k not in list(PARAMS_TYPES.keys()):
+                print(f'{k} is not in the current parameters list. Check the parameter or add in the param.txt file!')
+                continue
+
+            else:
+                temp_param.update({k:PARAMS_TYPES[k](v)})
+
+        # create an immutable param dict
+        self.params = MappingProxyType(temp_param)
         return self
 
     def plot_interfaces(self, fig:plt.Figure, axes:plt.Axes, mode:str='fill'):

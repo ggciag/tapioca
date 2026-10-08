@@ -1,6 +1,6 @@
 import numpy as np
 
-__all__ = ["VARIABLES_LIST","VARS_TYPES",
+__all__ = ["VARIABLES_LIST","VARS_TYPES","PARAMS_TYPES",
            "SEC_PER_YEAR","CM",
            "INTERFACES_PARAMETERS","DEFAULT_MATERIAL","MATERIAL_PARAMETERS","PARAMETERS_UNITS",
            "DEFAULT_MATERIALS"]
@@ -196,6 +196,161 @@ DEFAULT_MATERIALS:dict = {
     }
 }
 '''dict: Dictionary with the parameters of some "classic" rheologies. The rheology is the key and the values is the parameters.'''
+
+PARAMS_TYPES = {
+    # Simulation parameters
+    'dimensions':int,
+
+    'nx':int,
+    'nz':int,
+    'ny':int,
+    
+    'lx':float,
+    'lz':float,
+    'ly':float,
+
+    'particles_per_element':int,
+    'particles_per_element_x':int,
+    'particles_per_element_y':int,
+    'particles_per_element_z':int,
+    'particles_to_export':int,
+    'particles_perturb_factor':float,
+
+    ## Inputs
+    'interfaces_from_ascii':str, 
+    'temperature_from_ascii':str, 
+    'velocity_from_ascii':str, 
+    'n_interfaces':int,
+    'water_interface':int,
+    'air_threshold_density':float,
+
+    ## Magmatism
+    'magmatism':str, 
+    'magmatism_extraction':str, 
+    'magmatic_layer':str, 
+
+    ## Numerical
+    'multigrid':int,
+    'solver':str, 
+    'nondimensionalization':str, 
+    'denok':float,
+    'Xi_min':float,
+    'rtol':float,
+    'non_linear_method':str,
+    'periodic_boundary':str,
+    'RK4':str, 
+
+    ## Time    
+    'step_max':int,
+    'step_print':int,
+    'time_max':float,
+    'dt_max':float,
+    'sub_division_time_step':float,
+    'initial_print_step':int,
+    'initial_print_max_time':int,
+
+    ## Rheology
+    'initial_dynamic_range':str, 
+    'viscosity_reference':float,
+    'viscosity_min':float,
+    'viscosity_max':float,
+    'viscosity_per_element':str, 
+    'viscosity_mean_method':str, 
+    'viscosity_dependence':str, 
+
+    'random_initial_strain':float,
+    'rheology_model':int,
+    'weakening_min':float,
+    'weakening_max':float,
+    'A_healing':float,
+    'T0_healing':float,
+    'k_healing':float,
+    'strain_healing':float,
+
+    # Temperature and other parameters
+    'geoq':str,
+    'geoq_fac':float,
+    'plasticity':str, 
+    'adiabatic_component':str, 
+    'shear_heating':str, 
+    'Xi_shear':str, 
+    'radiogenic_component':str, 
+    'high_kappa_in_asthenosphere':str, 
+
+    'T_initial':int,
+    'temperature_difference':float,
+    'external_heat':float,
+    'basal_heat':float,
+    'pressure_const':float,
+
+    # Physical parameters
+    'density_mantle':float,
+    'gravity_acceleration':float,
+    'thermal_expansion_coefficient':float,
+    'thermal_diffusivity_coefficient':float,
+    'heat_capacity':float,
+
+    # Surface processes
+    'sp_surface_tracking':str, 
+    'surface_particles_per_element':int,
+    'sp_surface_processes':str, 
+
+    'free_surface_stab':str, 
+    'theta_FSSA':float,
+    
+    'sp_mode':str,
+    'sticky_blanket_air':str, 
+    
+    'surface_velocity':float,
+    'strain_sed':float,
+    'a2l':str, 
+
+    ## Fluvial/diffusion
+    'K_fluvial':float,
+    'm_fluvial':float,
+    'sea_level':float,
+    'sp_d_c':float,
+
+    ## Submarine
+    'continental_slope':float,
+    'variable_base_level':str,
+    
+    # Boundary conditions
+    
+    'top_normal_velocity':str, 
+    'bot_normal_velocity':str, 
+    'left_normal_velocity':str, 
+    'right_normal_velocity':str, 
+    'back_normal_velocity':str, 
+    'front_normal_velocity':str, 
+    'top_tangential_velocity':str, 
+    'bot_tangential_velocity':str, 
+    'left_tangential_velocity':str, 
+    'right_tangential_velocity':str, 
+    'back_tangential_velocity':str, 
+    'front_tangential_velocity':str, 
+    
+    'top_temperature':str, 
+    'bot_temperature':str, 
+    'left_temperature':str, 
+    'right_temperature':str, 
+    'front_temperature':str, 
+    'back_temperature':str, 
+
+    'variable_bcv':str, 
+    'bcv_extern':str,   
+    'multi_velocity':str,  
+
+    # Outputs
+    'export_thermal_diffusivity':str,
+    'print_step_files':str, 
+    'export_lithology':str, 
+    'checkered':str, 
+    'binary_output':str, 
+    'plot_sediment':str,
+}
+'''dict: Dictionary with the valid parameters in `param.txt` and its valid type'''
+
 
 
 # Useful data types descriptions:
