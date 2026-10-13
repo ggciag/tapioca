@@ -247,7 +247,7 @@ PARAMS_TYPES = {
     'dt_max':float,
     'sub_division_time_step':float,
     'initial_print_step':int,
-    'initial_print_max_time':int,
+    'initial_print_max_time':float,
 
     ## Rheology
     'initial_dynamic_range':str, 
