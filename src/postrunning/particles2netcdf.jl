@@ -243,11 +243,12 @@ function main()
         println("Usage: julia script.jl   SCENARIO_DIR   REFERENCE_TIME_STEP")
         println("Assuming REFERENCE_TIME_STEP=0")
         ref_step = 0
+        data_dir = ARGS[end]
     else
         ref_step = parse(Int, ARGS[end]) 
+        data_dir = ARGS[end-1]
     end
     
-    data_dir = ARGS[end-1]
     cd(data_dir) 
 
     params = read_param("param.txt")
