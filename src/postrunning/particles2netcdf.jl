@@ -128,6 +128,7 @@ function create_particles_nc(nc_fname::String, target_ids::Vector{Int32}, steps:
 
         # 2D Variables
         defVar(ds, "x", DTYPES["x"], ("id", "time"), 
+            fillvalue=NaN32,
             attrib=Dict(
                 "units"         => "m", 
                 "long_name"     => "x", 
@@ -136,6 +137,7 @@ function create_particles_nc(nc_fname::String, target_ids::Vector{Int32}, steps:
             ), deflatelevel=DEFLATE_LEVEL) 
         
         defVar(ds, "z", DTYPES["z"], ("id", "time"), 
+            fillvalue=NaN32,    
             attrib=Dict(
                 "units"         => "m", 
                 "long_name"     => "z", 
@@ -144,7 +146,8 @@ function create_particles_nc(nc_fname::String, target_ids::Vector{Int32}, steps:
             ), deflatelevel=DEFLATE_LEVEL) 
             
         
-        defVar(ds, "lithology", DTYPES["lithology"], ("id", "time"), 
+        defVar(ds, "lithology", DTYPES["lithology"], ("id", "time"),
+            fillvalue=-1, 
             attrib=Dict(
                 "long_name"   => "lithology",
                 "coordinates" => "time z x"
@@ -176,8 +179,8 @@ function process_trajectories(nc_fname::String, steps::Vector{Int32}, target_ids
         println("Running chunk $chunk_idx/$CHUNKS - Steps $(sub_steps[1]) to $(sub_steps[end])")
 
         
-        buffer_x = fill(DTYPES["x"].(-999.0), num_particles, len_chunk)
-        buffer_z = fill(DTYPES["z"].(-999.0), num_particles, len_chunk)
+        buffer_x = fill(NaN32, num_particles, len_chunk) #fill(DTYPES["x"].(-999.0), num_particles, len_chunk)
+        buffer_z = fill(NaN32, num_particles, len_chunk) #fill(DTYPES["z"].(-999.0), num_particles, len_chunk)
         buffer_litho = fill(DTYPES["lithology"].(-1), num_particles, len_chunk)
         
         chunk_start = time()
