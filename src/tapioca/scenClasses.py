@@ -89,6 +89,11 @@ class MandyocScen:
         filtered. Required if `filter_air` is True.
         
         Default is None.
+    set_nan : float, optional
+        Value to be considered "NoData" in X and Z. The values will be 
+        converted to nan. If None, `set_nan` is not considered.
+
+        Default is None.
     verbose : bool, optional
         If True, prints status messages to the console during loading and processing
         tasks. 
@@ -130,7 +135,7 @@ class MandyocScen:
                  xlimits:list=None, zlimits:list=None, tlimits:list=None, # ylimits should be implemented for the 3D version
                  thick_air:float=40e3,
                  chunks_vars:dict={"x": 'auto', "z": 'auto', 'time': "auto"},
-                 filter_air:bool=True, air_layer:int=None, #only relevant if load particles
+                 filter_air:bool=True, air_layer:int=None, set_nan:float=None, #only relevant if load particles
                  verbose:bool=False):
 
         # Setting directories and scen name
@@ -207,7 +212,7 @@ class MandyocScen:
             
         # Loading particles
         if load_particles:
-            self._load_particles(particles_file, chunks={'id': 'auto'}, filter_air=filter_air, air_layer=air_layer)
+            self._load_particles(particles_file, chunks={'id': 'auto'}, filter_air=filter_air, air_layer=air_layer,set_nan=set_nan)
             
         if self.verbose: print(f"Particles [{particles_file}] loaded")
         
@@ -396,7 +401,8 @@ class MandyocScen:
             
         return v
     
-    def _load_particles(self, name, chunks={'id': 'auto'}, filter_air=True, air_layer=None):
+    def _load_particles(self, name:str, chunks:dict={'id': 'auto'}, filter_air:bool=True, 
+                            air_layer:int=None, set_nan:float=None):
         """
         Loads Lagrangian particle trajectories from a NetCDF file into the DataTree.
 
@@ -425,6 +431,12 @@ class MandyocScen:
             to the air phase. 
             
             Default is None.
+        
+        set_nan : float, optional
+            Value to be considered "NoData" in X and Z. The values will be converted to nan. 
+            If None, `set_nan` is not considered.
+
+            Default is None.
 
         Returns
         -------
@@ -450,7 +462,11 @@ class MandyocScen:
             particles = particles.set_coords('step')
         
         particles = particles.sel(time=slice(self.tlimits[0], self.tlimits[-1]))
-        
+
+        if set_nan is not None:
+            particles['x'] = particles['x'].where(particles['x'] != set_nan)
+            particles['z'] = particles['z'].where(particles['z'] != set_nan)
+
         if filter_air and 'lithology' in particles.data_vars:
             if isinstance(air_layer, int): air = air_layer
             else: air = int(particles.lithology.max()) #future: find air layer by density?
@@ -649,20 +665,16 @@ class MandyocScen:
         
         return self
 
-    def fieldToParticle(self, variable, selected_name='', selection_name='', method='linear'):
+    def fieldToParticle(self, variable, selected_name='', method='linear'):
         """
         [ongoing]
         """
-        paths, names,pts0 = self._eval_particles_selection(selected_name=selected_name,selection_name=selection_name,get_selection=True)
-        source_path, target_path = paths
-        selected_name, selection_name = names
+        paths, _, pts0 = self._eval_particles_selection(selected_name=selected_name,selection_name='',get_selection=True)
+        source_path, _ = paths
+
         pts = pts0.copy()
 
         field = self.DTree.mesh.original[variable]
-        
-        #if not isinstance(variables, (list, tuple, np.ndarray)): variables = [variable]
-        
-        #components = list(field.data_vars)
         
         field_interpolated = field.interp(
             x=pts.x, 
@@ -671,9 +683,12 @@ class MandyocScen:
             method=method
         )
     
-        pts[variable] = field_interpolated.drop_vars(['x', 'z']).transpose('id', 'time')
+        # pts[variable] = field_interpolated.drop_vars(['x', 'z']).transpose('id', 'time')
+        # print(source_path)
+        # print(self.DTree[source_path])
+        self.DTree[source_path]=self.DTree[source_path].assign({variable:field_interpolated})
 
-        self.DTree[source_path][variable] = pts
-
+        del pts, field_interpolated, pts0
         gc.collect()
+
         return self
