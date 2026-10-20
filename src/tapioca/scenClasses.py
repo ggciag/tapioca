@@ -106,6 +106,13 @@ class MandyocScen:
         A dictionary of the parameters parsed from `param.txt`.
     DTree : xarray.DataTree
         The hierarchical data structure containing all loaded model outputs.
+    XMAX,XMIN,ZMIN,ZMAX : float
+        The domain boundaries for the loaded scenario. They are equivalent to the Lx 
+        and Lz parameters if the whole domain is loaded.
+    dx,dz : float
+        The node's spacing in x and z (constants).
+    dt : np.ndarray
+        The time spacing between the steps, which varies over the simulation.
     xlimits : list of float
         The horizontal spatial limits applied to the data.
     zlimits : list of float
@@ -151,7 +158,10 @@ class MandyocScen:
         
         if len(variables) == 0:
             raise ValueError("The 'variables' list cannot be empty. Need at least one variable to extract metadata.")
-        
+
+        self.dx = None
+        self.dz = None
+        self.dt = None
         self.get_scenarioData(variables[0])
         
         self.xlimits = xlimits if xlimits is not None else [self.XMIN, self.XMAX]
@@ -160,9 +170,9 @@ class MandyocScen:
         self.thick_air = thick_air #m
 
         
-        self._print_verbose(f'x limits: {self.xlimits}')
-        self._print_verbose(f'z limits: {self.zlimits}')
-        self._print_verbose(f'time limits: {self.tlimits}')
+        self._print_verbose(f'x limits: {self.xlimits} (dx = {self.dx: 11.4f})')
+        self._print_verbose(f'z limits: {self.zlimits} (dz = {self.dz: 11.4f})')
+        self._print_verbose(f'time limits: {self.tlimits} (average dt = {np.mean(self.dt): 3.8f})')
         
         self.z_corrected = False
         self.particles_loaded = False
@@ -278,6 +288,10 @@ class MandyocScen:
             self.ZMIN = ds.z.min().item()
             self.TMAX = ds.time.max().item()
             self.TMIN = ds.time.min().item()
+
+            self.dx = abs(float(ds.x[1] - ds.x[0]))
+            self.dz = abs(float(ds.z[1] - ds.z[0]))
+            self.dt = np.diff(ds.time.values)
 
         return True
     
