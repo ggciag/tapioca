@@ -1327,11 +1327,6 @@ class MandyocBuilder:
                         coords={ 'x':self.x, 'z': self.z}
                         )
 
-        fac = 1
-        if velocbuilder.units == 'cm/y': 
-            fac = 1 / (100 * SEC_PER_YEAR)
-            self._print_verbose('Velocity field are in cm/y, applying corrections...')
-
         if velocbuilder is not None:
             vx = xr.where(vx.z==0, velocbuilder.velocs.top.vx, vx).transpose('x', 'z')
             vx = xr.where(vx.z==self.Lz, velocbuilder.velocs.bot.vx, vx).transpose('x', 'z')
@@ -1343,8 +1338,8 @@ class MandyocBuilder:
             vz = xr.where(vz.z==0, velocbuilder.velocs.top.vz, vz).transpose('x', 'z')
             vz = xr.where(vz.z==self.Lz, velocbuilder.velocs.bot.vz, vz).transpose('x', 'z')
 
-            self.DTree.fields['vx'] = vx * fac
-            self.DTree.fields['vz'] = vz * fac
+            self.DTree.fields['vx'] = vx
+            self.DTree.fields['vz'] = vz
 
 
         self.DTree.fields['vx'].attrs['units'] = 'm/s'
@@ -1756,8 +1751,8 @@ class VelocityFieldBuilder:
         (1) Initialize the VelocityFieldBuilder with your current scenario;
         (2) Set velocities using `set_region` or `linear_velocity` functions;
         (3) Check the field conservation using the function `integrate_normal_components`;
-        (4) Apply the velocity correction using the function `conservate_veloc`. Maybe you 
-        should to iterate this step until to reach a tolerance divergence.
+        (4) Apply the velocity correction using the function `conservate_veloc`. You may 
+            need to repeat this step until the tolerance divergence is reached;
         (5) Brief visualize the velocities with `view_veloc`.
 
         Parameters
@@ -1827,8 +1822,21 @@ class VelocityFieldBuilder:
 
             # The 3D still have to be implemented
 
+        self.unifac = 1
+        self.unifac_len = 1 # for lengths
+        self.unifac_int = 1 # for integrals
         self.units = units
-        scenarioBuilder._print_verbose(f'The velocity builder was created. Velocities have to be in {self.units}')
+
+        if units == 'cm/y':
+            print("Velocity is given in cm/y. The field will be automatically converted to m/s")
+            self.unifac_len = 100 # m to cm
+            self.unifac = 0.01/SEC_PER_YEAR # cm/y to m/s 
+            self.unifac_int = 1e4 * SEC_PER_YEAR # m2/s to cm2/y 
+        elif units != 'm/s':
+            print(f"{units} is not a valid unit for the velocity field.")
+            self.unifac = 1
+
+        scenarioBuilder._print_verbose(f'The velocity builder was created.')
 
     def set_region(self, boundary:str, range:list|tuple|np.ndarray, vx=None, vz=None, mode:str='set'):
         '''
@@ -1862,8 +1870,8 @@ class VelocityFieldBuilder:
         self._apply_veloc(mask, boundary, vx, vz, mode)
 
         if vx is None: vx = 0
-        if vx is None: vz = 0
-        self.scenario._print_verbose(f'Constant velocity in the {boundary}: from [{range[0]:.1f},{range[1]:.1f}], vx={vx:.3e}, vz={vz:.3e} {self.units}')
+        if vz is None: vz = 0
+        self.scenario._print_verbose(f'({mode}) velocity in the {boundary}: from [{range[0]:.1f},{range[1]:.1f}], vx={vx:.3e}, vz={vz:.3e} {self.units}')
 
         return self
 
@@ -1918,9 +1926,6 @@ class VelocityFieldBuilder:
             Default is 'set'.
         '''
 
-        vx = self.velocs[boundary].vx
-        vz = self.velocs[boundary].vz 
-
         if coef is None: # calculate the slope coeficient
             coef = (vlims[1]-vlims[0])/(clims[1]-clims[0])
             
@@ -1936,15 +1941,13 @@ class VelocityFieldBuilder:
 
         self.scenario._print_verbose(f'linear velocity in the {boundary} boundary: {v_component} = {coef:.3e} * COORD + {b:.3e}')
 
-        if v_component == 'vz': 
-            vz = veloc
-        
-        elif v_component == 'vx': 
-            vx = veloc
         
         mask = self._create_mask(values_range=range, boundary=boundary)
 
-        self._apply_veloc(mask, boundary, vx, vz, mode)
+        if v_component == 'vz':
+            self._apply_veloc(mask, boundary, None, veloc, mode)
+        elif v_component == 'vx':
+            self._apply_veloc(mask, boundary, veloc, None, mode)
         
         return self
 
@@ -1952,6 +1955,11 @@ class VelocityFieldBuilder:
         ''' 
         Internal method to get the masked interval
         '''
+        if values_range is None:
+            if boundary in ['top','bot']:
+                values_range = [self.x.min(), self.x.max()]
+            else:
+                values_range = [self.z.min(), self.z.max()]
 
         if boundary in ['top','bot']:
             xmin, xmax = values_range
@@ -1985,9 +1993,9 @@ class VelocityFieldBuilder:
         outflux_b = -bot_vz.integrate("x")
 
         sum_outflux = outflux_l + outflux_r + outflux_t + outflux_b
-        self.scenario._print_verbose(f"Int V = {sum_outflux.values:.3e}")
+        self.scenario._print_verbose(f"Int V = {sum_outflux.values:.3e} m²/s")
         
-        return sum_outflux
+        return float(sum_outflux.values)
 
     def conservate_veloc(self,boundary:str='bot', correction_factor:float=1.0):
         '''
@@ -2005,26 +2013,27 @@ class VelocityFieldBuilder:
             Default is 1.0.
         '''
 
-        v_exc = self.integrate_normal_components()
+        v_exc = self.integrate_normal_components() * self.unifac_int
         target_flux = -v_exc * correction_factor
 
+            
         if boundary in ['bot', 'top']:
             normal = 1 if boundary == 'top' else -1
-            vz_compensation = (target_flux / abs(self.Lx)) * normal
-            
             ranges = [self.x.min()+1.5*self.dx, self.x.max()-1.5*self.dx]
+            width = (self.Lx-3*self.dx) * self.unifac_len
+            vz_compensation = (target_flux / width) * normal
             
-            self.scenario._print_verbose(f"Applying compensating Vz = {vz_compensation:.3e} to {boundary}")
+            # self.scenario._print_verbose(f"Applying compensating Vz = {vz_compensation:.3e} to the {boundary} boundary")
             self.set_region(boundary, ranges, vz=vz_compensation, mode='add')
         
 
         elif boundary in ['left', 'right']:
             normal = 1 if boundary == 'right' else -1
-            vx_compensation = (target_flux / abs(self.Lz)) * normal
-            
             ranges = [self.z.min()+1.5*self.dz, self.z.max()-1.5*self.dz]
-            
-            self.scenario._print_verbose(f"Applying compensating Vx = {vx_compensation:.3e} to {boundary}")
+            width = (self.Lz-3*self.dz) * self.unifac_len
+            vx_compensation = (target_flux / width) * normal
+                       
+            # self.scenario._print_verbose(f"Applying compensating Vx = {vx_compensation:.3e} to the {boundary} boundary")
             self.set_region(boundary, ranges, vx=vx_compensation, mode='add')
         
         return self
@@ -2050,23 +2059,22 @@ class VelocityFieldBuilder:
             raise ValueError(f"Invalid mode '{mode}'. Use 'set' or 'add'.")
 
         if vx is not None:
+
+            if mode == 'add':
+                new_vx = self.velocs[boundary]['vx'] + vx*self.unifac
+            else:
+                new_vx = vx*self.unifac
             
-            target_vx = self.velocs[boundary]['vx'] + vx if mode == 'add' else vx
-            
-            self.velocs[boundary]['vx'] = xr.where(
-                mask, 
-                target_vx, 
-                self.velocs[boundary]['vx']
-            )
-            
+            self.velocs[boundary]['vx'] = xr.where(mask, new_vx, self.velocs[boundary]['vx'])
+
         if vz is not None:
-            target_vz = self.velocs[boundary]['vz'] + vz if mode == 'add' else vz
-            
-            self.velocs[boundary]['vz'] = xr.where(
-                mask, 
-                target_vz, 
-                self.velocs[boundary]['vz']
-            )
+
+            if mode == 'add':
+                new_vz = self.velocs[boundary]['vz'] + vz*self.unifac
+            else:
+                new_vz = vz*self.unifac
+                
+            self.velocs[boundary]['vz'] = xr.where(mask, new_vz, self.velocs[boundary]['vz'])
 
         return self
 
@@ -2077,40 +2085,66 @@ class VelocityFieldBuilder:
 
         returns: (plt.Figure, plt.Figure)
         '''
+
+        # LEFT AND RIGHT PLOTS
         fig1, axslr = plt.subplots(1,2, sharex=True, sharey=True)
+        
+        zplot = self.z
 
-        self.velocs.right.vx.plot(y='z',ax=axslr[1],label='vx')
-        self.velocs.right.vz.plot(y='z',ax=axslr[1],label='vz')
+        vxplotR = self.velocs.right.vx.values / self.unifac
+        vzplotR = self.velocs.right.vz.values / self.unifac
 
-        self.velocs.left.vx.plot(y='z',ax=axslr[0],label='vx')
-        self.velocs.left.vz.plot(y='z',ax=axslr[0],label='vz')
+        vxplotL = self.velocs.left.vx.values / self.unifac
+        vzplotL = self.velocs.left.vz.values / self.unifac
+
+        axslr[0].plot(vzplotL,zplot,color='red',label='vz')
+        axslr[0].plot(vxplotL,zplot,color='black',label='vx')
+        
+
+        axslr[1].plot(vzplotR,zplot,color='red',label='vz')
+        axslr[1].plot(vxplotR,zplot,color='black',label='vx')
+        
+                
         axslr[0].set_title('left')
         axslr[1].set_title('right')
         axslr[0].legend()
-        axslr[0].set_xlabel('vel.')
-        axslr[1].set_xlabel('vel.')
+        axslr[0].set_xlabel(f'vel. [{self.units}]')
+        axslr[1].set_xlabel(f'vel. [{self.units}]')
+        axslr[0].set_ylabel('z [m]')
 
         axslr[0].grid()
         axslr[1].grid()
 
+
+        # TOP AND BOT PLOTS
         fig2, axstb = plt.subplots(2,1, sharex=True, sharey=True)
+        xplot = self.x
+        
+        vxplotT = self.velocs.top.vx.values / self.unifac
+        vzplotT = self.velocs.top.vz.values / self.unifac
 
-        self.velocs.top.vx.plot(x='x',ax=axstb[0],label='vx')
-        self.velocs.top.vz.plot(x='x',ax=axstb[0],label='vz')
+        vxplotB = self.velocs.bot.vx.values / self.unifac
+        vzplotB = self.velocs.bot.vz.values / self.unifac
 
-        self.velocs.bot.vx.plot(x='x',ax=axstb[1],label='vx')
-        self.velocs.bot.vz.plot(x='x',ax=axstb[1],label='vz')
+        axstb[0].plot(xplot, vxplotT, color='black',label='vx')
+        axstb[0].plot(xplot, vzplotT, color='red',label='vz')
+
+        axstb[1].plot(xplot, vxplotB, color='black',label='vx')
+        axstb[1].plot(xplot, vzplotB, color='red',label='vz')
 
         axstb[0].set_title('top')
         axstb[1].set_title('bot')
         axstb[0].legend()
-        axstb[1].set_ylabel('vel.')
-        axstb[0].set_ylabel('vel.')
+
+        axstb[1].set_ylabel(f'vel. [{self.units}]')
+        axstb[0].set_ylabel(f'vel. [{self.units}]')
+        axstb[1].set_xlabel('x [m]')
 
         axstb[0].grid()
         axstb[1].grid()
 
-        print(f'Int V•dS = {self.integrate_normal_components().values}')
+
+        print(f'Int V•dS = {self.integrate_normal_components():.3f} m²/s')
 
         return fig1,fig2
 
