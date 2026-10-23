@@ -1242,8 +1242,8 @@ class MandyocBuilder:
 
         for p in MATERIAL_PARAMETERS:
             field = xr.DataArray(
-                                np.ones((self.Nx, self.Nz))*-999, 
-                                dims=('x', 'z'),
+                                np.ones((self.Nz, self.Nx))*-999, 
+                                dims=('z', 'x'),
                                 coords={ 'x':self.x, 'z': self.z}
                                 )
 
@@ -1316,30 +1316,30 @@ class MandyocBuilder:
         '''
     
         vx = xr.DataArray(
-                        np.ones((self.Nx, self.Nz))*vxconst, 
-                        dims=('x', 'z'),
+                        np.ones((self.Nz, self.Nx))*vxconst, 
+                        dims=('z', 'x'),
                         coords={ 'x':self.x, 'z': self.z}
                         )
         
         vz = xr.DataArray(
-                        np.ones((self.Nx, self.Nz))*vzconst, 
-                        dims=('x', 'z'),
+                        np.ones((self.Nz, self.Nx))*vzconst, 
+                        dims=('z', 'x'),
                         coords={ 'x':self.x, 'z': self.z}
                         )
 
         if velocbuilder is not None:
-            vx = xr.where(vx.z==0, velocbuilder.velocs.top.vx, vx).transpose('x', 'z')
-            vx = xr.where(vx.z==self.Lz, velocbuilder.velocs.bot.vx, vx).transpose('x', 'z')
-            vx = xr.where(vx.x==0, velocbuilder.velocs.left.vx, vx).transpose('x', 'z')
-            vx = xr.where(vx.x==self.Lx, velocbuilder.velocs.right.vx, vx).transpose('x', 'z')
+            vx = xr.where(vx.z==0, velocbuilder.velocs.top.vx, vx)
+            vx = xr.where(vx.z==self.Lz, velocbuilder.velocs.bot.vx, vx)
+            vx = xr.where(vx.x==0, velocbuilder.velocs.left.vx, vx)
+            vx = xr.where(vx.x==self.Lx, velocbuilder.velocs.right.vx, vx)
             
-            vz = xr.where(vz.x==0, velocbuilder.velocs.left.vz, vz).transpose('x', 'z')
-            vz = xr.where(vz.x==self.Lx, velocbuilder.velocs.right.vz, vz).transpose('x', 'z')
-            vz = xr.where(vz.z==0, velocbuilder.velocs.top.vz, vz).transpose('x', 'z')
-            vz = xr.where(vz.z==self.Lz, velocbuilder.velocs.bot.vz, vz).transpose('x', 'z')
+            vz = xr.where(vz.x==0, velocbuilder.velocs.left.vz, vz)
+            vz = xr.where(vz.x==self.Lx, velocbuilder.velocs.right.vz, vz)
+            vz = xr.where(vz.z==0, velocbuilder.velocs.top.vz, vz)
+            vz = xr.where(vz.z==self.Lz, velocbuilder.velocs.bot.vz, vz)
 
-            self.DTree.fields['vx'] = vx
-            self.DTree.fields['vz'] = vz
+            self.DTree.fields['vx'] = vx.transpose('z','x')
+            self.DTree.fields['vz'] = vz.transpose('z','x')
 
 
         self.DTree.fields['vx'].attrs['units'] = 'm/s'
@@ -1361,8 +1361,8 @@ class MandyocBuilder:
         '''
     
         temp = xr.DataArray(
-                        np.ones((self.Nx, self.Nz))*-1, 
-                        dims=('x', 'z'),
+                        np.ones((self.Nz, self.Nx))*-1, 
+                        dims=('z', 'x'),
                         coords={ 'x':self.x, 'z': self.z}
                         )
 
@@ -1735,6 +1735,23 @@ class MandyocBuilder:
         self.params = MappingProxyType(temp_param)
         return self
 
+
+    def export_params(self):
+        '''
+        Export the scenario parameters (set via `set_params`) to a text file in Mandyoc's
+        `param.txt`.
+        '''
+
+        if not hasattr(self, 'params'):
+            raise RuntimeError("Parameters not set. Call `set_params(...)` first.")
+
+        col = max(len(k) for k in self.params) + 4
+        path = os.path.join(self.path, 'param.txt')
+        with open(path, 'w') as f:
+            for key, value in self.params.items():
+                f.write(f"{key:<{col}}= {value} \n")
+            
+    
     def plot_interfaces(self, fig:plt.Figure, axes:plt.Axes, mode:str='fill'):
 
         return fig, axes
@@ -2246,7 +2263,8 @@ class TemperatureFieldBuilder:
         self.H = scenarioBuilder.DTree.fields.H
         self.k_cond = self.kappa*self.rho*self.c_cap
         
-        self.temperature = xr.DataArray(np.zeros((self.Nx,self.Nz),np.float64),dims=('x','z'),
+        self.temperature = xr.DataArray(np.zeros((self.Nz,self.Nx),np.float64),
+                                     dims=('z','x'),
                                      coords={'x':self.x,'z':self.z})
         
         self.temperature.attrs['units']='deg C'
@@ -2276,8 +2294,8 @@ class TemperatureFieldBuilder:
         '''
         self.t_pot = t_pot
         self.lithosphere_thickness = lithosphere_thickness
-        self.temperature[:,:] = (t_pot)/lithosphere_thickness * -self.ZZ.T
-        temp_adiabatic = t_pot / np.exp(self.g * self.alpha * -self.ZZ.T / self.c_cap)
+        self.temperature[:,:] = (t_pot)/lithosphere_thickness * -self.ZZ
+        temp_adiabatic = t_pot / np.exp(self.g * self.alpha * -self.ZZ / self.c_cap)
         
 
         self.temperature = xr.where(self.temperature < 0, 0.0,self.temperature)

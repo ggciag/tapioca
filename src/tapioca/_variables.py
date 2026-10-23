@@ -149,7 +149,7 @@ DEFAULT_MATERIALS:dict = {
         "friction_angle_min": 2.0,
         "friction_angle_max": 15.0
     },
-    "WET_ANORTHITE": { # Rybacki and Dresen (2000); Andrés-Martínez et al. (2019)
+    "WET_ANORTHITE": { # Rybacki and Dresen (2000, 2004); Andrés-Martínez et al. (2019)
         "C": 1.0,
         "rho": 2850.0,
         "H": 7.123e-11,        # 0.041 uW/m^3
