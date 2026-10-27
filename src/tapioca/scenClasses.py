@@ -2301,6 +2301,7 @@ class TemperatureFieldBuilder:
         self.temperature = xr.where(self.temperature < 0, 0.0,self.temperature)
         self.temperature = xr.where(self.temperature>temp_adiabatic,temp_adiabatic,self.temperature)
 
+    # this function needs improvement, it's too slow. maybe I should solve the heat equation by an implicit method
     def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
         '''
         This function solves the 2D transient heat diffusion equation over a specified maximum 
