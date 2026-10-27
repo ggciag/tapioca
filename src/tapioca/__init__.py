@@ -4,13 +4,13 @@ Tapioca-Mandyoc: Input and Output management and post-processing for Mandyoc geo
 
 from warnings import catch_warnings, filterwarnings
 
-__version__ = "0.5.5"
+__version__ = "0.7.5"
 
 # 1. Import variables
 from ._variables import *
 
 # 2. Import Scenario Classes
-from .scenClasses import MandyocScen, MandyocBuilder, VelocityFieldBuilder, TemperatureFieldBuilder
+from .scenClasses import MandyocScen
 
 # 3. Importing post processing objects and functions
 with catch_warnings(): #filtering warning for the preexisting attribute of the datatree accessor

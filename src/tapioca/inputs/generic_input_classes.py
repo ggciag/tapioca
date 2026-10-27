@@ -1,0 +1,1625 @@
+import os
+from pathlib import Path
+
+from shapely.geometry import Polygon,LineString
+from shapely import to_ragged_array
+import matplotlib.pyplot as plt
+from types import MappingProxyType
+
+import numpy as np
+import xarray as xr
+from xarray import DataTree
+
+from .._variables import VARS_TYPES, PARAMS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
+from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
+
+__all__ = ['MandyocBuilder','TemperatureFieldBuilder','VelocityFieldBuilder']
+
+class MandyocBuilder:
+
+    def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, 
+            Ny:int=0, Ly:float=0.0, thick_air:float=40e3, 
+            verbose:bool=True):
+        """
+        A builder class made to generate, manage, and export initial setups 
+        for Mandyoc geodynamic models. 
+        
+        It utilizes xarray's DataTree structure to strictly separate 
+        1D geometric boundaries (interfaces) and 2D/3D material properties (fields). 
+        By default, it assumes a Cartesian coordinate system where the Z-axis is negative 
+        downwards (from the bottom of the model at -Lz up to 0). 
+
+        Parameters
+        ----------
+        path : str or Path
+            The absolute or relative directory path where the generated scenario files will be exported.
+        
+        Nx : int
+            The number of numerical nodes along the X-axis (horizontal).
+            
+        Nz : int
+            The number of numerical nodes along the Z-axis (vertical/depth).
+            
+        Lx : float
+            The total length of the model domain along the X-axis (in meters).
+            
+        Lz : float
+            The total depth of the model domain (in meters). 
+            Note: The class automatically converts this to a negative value internally to represent depth below the surface.
+            
+        Ny : int, optional
+            The number of numerical nodes along the Y-axis. Required only for 3D scenarios. 
+            Default is 0.
+            
+        Ly : float, optional
+            The total physical length of the model domain along the Y-axis in meters. 
+            Required only for 3D scenarios. 
+            Default is 0.0.
+            
+        thick_air : float, optional
+            The thickness of the sticky air layer at the top of the model domain (in meters). 
+            Default is 40000.0 (40 km).
+            
+        verbose : bool, optional
+            If True, the builder will print status updates and configuration details to the console during functions execution. 
+            Default is True.
+
+        Attributes
+        ----------
+        path : str
+            The output directory path.
+            
+        verbose : bool
+            The current verbosity state of the builder.
+            
+        thick_air : float
+            The defined thickness of the sticky air layer.
+            
+        Nx, Nz, Ny : int
+            The node counts for the X, Z, and Y axes, respectively. 
+            `Ny` remains None if the model is 2D.
+            
+        Lx, Lz, Ly : float
+            The physical dimensions of the grid. `Lz` is strictly negative. 
+            `Ly` remains None if the model is 2D.
+            
+        dimensions : int
+            The spatial dimensionality of the model (either 2 or 3), determined automatically 
+            based on the provided `Ny` and `Ly` parameters.
+            
+        x : numpy.ndarray
+            A 1D array of length `Nx` containing the spatial coordinates along the X-axis 
+            (from 0 to `Lx`).
+            
+        z : numpy.ndarray
+            A 1D array of length `Nz` containing the spatial coordinates along the Z-axis 
+            (from `Lz` to 0).
+            
+        y : numpy.ndarray or None
+            A 1D array of length `Ny` containing the spatial coordinates along the Y-axis 
+            (from 0 to `Ly`). None if the model is 2D.
+            
+        DTree : xarray.DataTree
+            The core hierarchical data structure storing the model's geometry and physics. 
+            It contains two main groups:
+            * `/interfaces`: An `xarray.Dataset` storing the 1D (or 2D if the model is 3D) 
+            depth arrays defining the boundaries between different geological layers. 
+            Contains material parameters in the datarrays attributes.
+            * `/fields`: An `xarray.Dataset` storing the fully 2D (or 3D) grids containing 
+            the final material properties (e.g., density, radiogenic heat) in the discrete
+            numerical nodes. It can also contain the input variables (vx, vz, temperature).
+            """
+        
+        self.path = path
+        self.verbose = verbose
+        self.thick_air = thick_air
+        ensure_directory_exists(self.path)
+
+        self.Nx = Nx
+        self.Nz = Nz
+        self.Lx = Lx
+        self.Lz = -Lz
+        self.Ly = self.Ny = self.y = None
+        self.dimensions = 2
+
+        self.x = np.linspace(0, self.Lx, self.Nx)
+        self.z = np.linspace(self.Lz, 0, self.Nz)
+
+        self.dx = self.x[1] - self.x[0]
+        self.dz = self.z[0] - self.z[1]
+
+        # Creating the DataTree structure to store the model layers
+        self.DTree = DataTree.from_dict( {"fields":
+                            xr.Dataset(coords={'x': self.x, 'z': self.z}), 
+                                    "interfaces":xr.Dataset(coords={'x': self.x})})
+
+        self.DTree['/fields']["x"].attrs["units"] = "m"
+        self.DTree['/fields']["z"].attrs["units"] = "m"
+        self.DTree['/fields']["x"].attrs["axis"] = "X"
+        self.DTree['/fields']["z"].attrs["axis"] = "Z"
+        self.DTree['/fields'].attrs["description"] = "This group contains the fields of the model, each variable is a DataArray considering the material properties from the interfaces."
+
+        self.DTree['/interfaces']["x"].attrs["units"] = "m"
+        self.DTree['/interfaces'].attrs["description"] = "This group contains the interfaces of the model, each interface is a DataArray with the depth and the material properties as attributes."
+        
+        # setting the model dimensions
+        if Ny>0 and abs(Ly)>0:
+            self.Ly = Ly
+            self.Ny = Ny
+            self.dimensions = 3
+            self.y = np.linspace(0, self.Ly, self.Ny)
+            self.dy = self.y[1] - self.y[0]
+
+            self.DTree = DataTree.from_dict( {"fields":
+                                xr.Dataset(coords={'x': self.x, 'y': self.y, 'z': self.z}), 
+                                        "interfaces":xr.Dataset(coords={'x': self.x, 'y': self.y})})
+
+            self.DTree['/fields'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
+            self.DTree['/interfaces'].expand_dims(dim='y', axis=1).assign_coords(y=self.y)
+            
+            self.DTree['/fields']["y"].attrs["units"] = "m"
+            self.DTree['/fields']["y"].attrs["axis"] = "Y"
+            self.DTree['/interfaces']["y"].attrs["units"] = "m"
+            
+    def _print_verbose(self, message:str, ending ="\n"):
+        '''
+        Internal method to print a message if verbose is True
+
+        Parameters
+        ----------
+        message : str
+            The printed message
+
+        ending : str
+            The end of the string text.
+            Default is `\n`.
+        '''
+        if self.verbose:
+            print(message,end=ending)
+        return None
+
+    def create_interface(self, id_layer:int, position:float|np.ndarray, interface_name:str=None, **material):
+        '''
+        Create a structural interface and assign its geometric position and material properties.
+
+        This function creates an interface DataArray and adds it to the model's DataTree. It supports both 2D and 3D dimensions. 
+        Note that an ID of -1 is treated as a special uppermost bounding layer (e.g., air); its coordinates are forced to 0 regardless of the position input.
+        
+        Parameters
+        ----------
+        id_layer: int
+            The integer identifier for the layer. Use -1 to specify the uppermost layer of the model.
+        
+        position: float or np.ndarray
+            The depth position of the interface. This can be a constant float representing a flat depth, or an array defining a complex surface.
+        
+        interface_name: str, optional
+            The name assigned to the interface in the dataset. If not provided, it automatically defaults to `interface_{id_layer}`.
+
+            Default is None.
+
+        **material
+            Rheological and thermal parameters for the layer. These inputs overwrite the properties of the `DEFAULT_MATERIAL`. 
+            A density value ('rho') must be explicitly provided or the function raises a ValueError.
+        
+        '''
+
+        if interface_name==None:
+            interface_name = f'interface_{id_layer}'
+                
+        # Defining material properties
+        interface_parameters = DEFAULT_MATERIAL.copy() # default material
+
+        self._print_verbose(f'ID {id_layer} -> {interface_name}')
+        for k in list(material.keys()):
+            interface_parameters[k] = material[k]
+
+            self._print_verbose(f'{k}:{interface_parameters[k]}', ending="; ")
+        self._print_verbose('')
+
+        if interface_parameters['rho'] == None:
+            raise ValueError("ERROR: You must to set a density (rho) to the material interface!")
+
+
+        if id_layer!=-1:
+            interface_coords = self._evaluate_interface_position(position)
+            #create a default interface at the top of the model (ZMAX)
+
+        else:
+            print(f'''Layer with ID {id_layer} is the top layer, it contains the initial material properties of the model that is above the last interface.\nYou can set material properties for this layer, but you cannot create an interface.''')
+            
+            interface_coords = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
+            interface_coords *= 0
+
+        # Check interface_coords shape and values to ensure they are within the model bounds
+        # self._check_coords(interface_coords)
+
+        if self.dimensions==2:
+            self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x], 
+                                                                              dims=['x'], name=interface_name))
+            
+        elif self.dimensions==3:
+            self.DTree['/interfaces'][interface_name] = (xr.DataArray(interface_coords, coords=[self.x,self.y], 
+                                                                                 dims=['x','y'], name=interface_name))
+
+        self.DTree['/interfaces'][interface_name].attrs['id'] = id_layer
+        self.DTree['/interfaces'][interface_name].attrs.update(interface_parameters)
+        return self
+
+
+    def add_interface_from_shapely(self, layer:str, polygon:Polygon, poly_name:str=None, intersection_line:str='mid', **material): # 2D
+        '''
+        Add interfaces from a defined convex polygon. The user must specify the layer in which the polygon will be contained.
+
+        This function creates the interfaces DataArray and adds it to the model's DataTree. 
+        Note that this function creates two interfaces: top and bottom of the polygon. The IDs are automatically corrected using the specified layer.
+        The top interface receives the material within the polygon, while the bottom interface receives the parameters from the outer layer.
+        
+        Parameters
+        ----------
+        layer: str
+            The name of the layer that will receive/contain the given polygon.
+        
+        polygon: shapely.Polygon
+            The Polygon object created with shapely. The polygon has to be convex and with no negative features in x direction. 
+        
+        poly_name: str, optional
+            The name for the polygon interfaces.
+
+            Default is None.
+        
+        intersection_line: str, optional
+            The relative position of the interface line in the polygon. Possible values are 'mid', 'top', 'bot'.
+
+            Default is 'mid'.
+
+        **material
+            Rheological and thermal parameters within the polygon.
+        
+        '''
+        polycoords = to_ragged_array([polygon])[1]
+        polyxcoords = np.unique(polycoords[:,0])
+
+        xmin,zmin, xmax,zmax = polygon.bounds
+        mid_z = (zmin+zmax)/2
+
+        # checking where the null line position
+        if intersection_line == 'top':
+            z_ref = zmax
+        elif intersection_line == 'bot':
+            z_ref = zmin
+        elif intersection_line == 'mid':
+            z_ref = mid_z
+        else:
+            raise ValueError("The position for the intersection line must be: `top`, `bot` or `mid`.")
+
+        self._print_verbose(f'Polygon bounds: ({xmin,zmin}) ({xmax,zmax})')
+        self._print_verbose(f'Intersection line ({intersection_line} line) is at {z_ref} m depth')
+
+        top_intersec_pts = []
+        bot_intersec_pts = []
+
+        for x in polyxcoords:
+            vline = LineString([(x,0),(x,self.Lz)])
+            pts_x, pts_y = vline.intersection(polygon).xy
+            pts_x, pts_y = list(pts_x),list(pts_y)
+            if len(pts_x) > 1:
+                top_intersec_pts.append([pts_x[0],pts_y[0]]) # top point
+                bot_intersec_pts.append([pts_x[1],pts_y[1]]) # bot point
+
+            elif len(pts_x) == 1: # append the same point 
+                top_intersec_pts.append([pts_x[0],pts_y[0]])
+                bot_intersec_pts.append([pts_x[0],pts_y[0]])
+
+        fac = 1 # m
+        special_points = [ 
+        [xmin-fac, z_ref], # left polygon boundary
+        [xmax+fac, z_ref], # right polygon boundary
+        [0, z_ref], # left boundary
+        [self.Lx, z_ref], # right boundary
+        ]
+
+        for sp in special_points:
+            top_intersec_pts.append(sp)
+            bot_intersec_pts.append(sp)
+
+        top_interface = np.array(top_intersec_pts)
+        bot_interface = np.array(bot_intersec_pts)
+        
+        # handle with the ids
+        interfaces_names = list(self.DTree.interfaces.variables)[:-1]
+        id_above = self.DTree['/interfaces'][layer].attrs['id']
+
+        for n in interfaces_names:
+            if self.DTree['/interfaces'][n].attrs['id'] == id_above:
+                above_material = self.DTree['/interfaces'][n].attrs.copy()
+                self._print_verbose(f"Above layer is: ({self.DTree['/interfaces'][n].attrs['id']}) {n}")
+
+            if (self.DTree['/interfaces'][n].attrs['id'] >= id_above) and (id_above > 0):
+                self.DTree['/interfaces'][n].attrs['id'] += 2
+
+        # in case the polygon is within the air (-1)
+        if id_above < 0:
+            id_above = len(interfaces_names)+1
+        
+        self.create_interface(id_above,bot_interface,interface_name=f'bot_{poly_name}',**above_material)
+        self.create_interface(id_above+1,top_interface,interface_name=f'top_{poly_name}',**material)
+
+        return self
+
+    def _evaluate_interface_position(self, coord):
+        """
+        Internal method to verify what type of coordinate or position the interfaces function
+        is recieving
+        """
+
+        if isinstance(coord,float) or isinstance(coord,int):
+            self._print_verbose('The interface is a flat line/surface')
+        
+            coordArray = np.ones(self.Nx) if self.dimensions==2 else np.ones((self.Nx,self.Ny))
+            return coordArray*coord
+
+        # Verify if the coord is a bunch of points to interpolate or is the whole interface (line/surface)
+        elif isinstance(coord,np.ndarray) and self.dimensions==2:
+            self._print_verbose('The interface is a line')
+
+            if len(coord) == len(self.x):
+                print('The whole interfaces was provided, no need to interpolate')
+                #print(f"WARNING: The number of points provided ({len(coord)}) is different from the number of x-coordinates ({self.Nx}).)
+                return coord
+            
+            elif len(coord[0])!=2:
+                raise ValueError("ERROR: The coordinates for the interface must be a 2D array with two columns (x,z).")
+            args_sorted = np.argsort(coord[:,0])
+
+            return np.interp(self.x, coord[:,0][args_sorted], coord[:,1][args_sorted])
+
+        else:
+            raise ValueError("ERROR: The coordinates for the interface must be: " \
+            "float;" \
+            "int for 2D and 3D models; " \
+            "2D array with points (x,z columns) for 2D models.")
+
+        # Add interfaces from Shapely geometries
+        
+        return None
+
+
+    def evaluate_interfaces(self):
+        #analyse if interfaces are crossing each other and to fix it
+
+        return self
+
+    def create_materials_fields(self):
+        """
+        Turns interfaces into 2D (or 3D) material fields.
+
+        This method iterates through all defined material parameters (e.g., density, radiogenic heat) 
+        and constructs corresponding spatial fields in the `DataTree`.
+
+        The interfaces are automatically sorted by their `id` attribute before field generation. 
+        The method handles two special boundary IDs to bound the top and bottom of the model:
+        * ID `-1`: Represents the uppermost layer (e.g., sticky air). It fills all grid nodes 
+          above the highest interface.
+        * ID `0`: Represents the lowermost basal layer. It fills all grid nodes below the deepest interface.
+        """
+        #create the xdataarray fields with interfaces params 
+
+        self._print_verbose("Sorting interfaces by ID:")
+        sorted_interfaces = sorted(self.DTree.interfaces.ds.data_vars, key=lambda v: self.DTree.interfaces.ds[v].attrs['id'])
+        self.DTree.interfaces.ds = self.DTree.interfaces.ds[sorted_interfaces]
+
+        interfaces_names = list(self.DTree.interfaces.variables)[:-1]
+        self._print_verbose(f"{'-'.join(interfaces_names)}")
+
+        for p in MATERIAL_PARAMETERS:
+            field = xr.DataArray(
+                                np.ones((self.Nz, self.Nx))*-999, 
+                                dims=('z', 'x'),
+                                coords={ 'x':self.x, 'z': self.z}
+                                )
+
+            for i in range(len(interfaces_names)):
+                name = interfaces_names[i]
+                curr_interface = self.DTree.interfaces.ds[name]
+                id_layer = curr_interface.attrs['id']
+                fill_value = curr_interface.attrs[p]
+
+                if id_layer < 1:
+                    continue
+                
+                below_interface = self.DTree.interfaces.ds[interfaces_names[i-1]]
+                id_layer_below = below_interface.attrs['id']
+
+                cond = (field.z > below_interface) & (field.z <= curr_interface)
+
+                field = xr.where(cond, fill_value, field)
+
+            # Id 0
+            name = interfaces_names[1]
+            curr_interface = self.DTree.interfaces.ds[name]
+            id_layer = curr_interface.attrs['id']
+            fill_value = curr_interface.attrs[p]
+
+            cond = (field.z <= curr_interface)
+            field = xr.where(cond, fill_value, field)
+
+            # Id -1
+            name = interfaces_names[0]
+            curr_interface = self.DTree.interfaces.ds[name]
+            id_layer = curr_interface.attrs['id']
+            fill_value = curr_interface.attrs[p]
+
+            below_interface = self.DTree.interfaces.ds[interfaces_names[-1]]
+
+            cond = (field.z > below_interface)
+            field = xr.where(cond, fill_value, field)
+
+            field.attrs['parameter'] = INTERFACES_PARAMETERS[p]
+            field.attrs['units'] = PARAMETERS_UNITS[p]
+
+            self.DTree.fields[p] = field
+            self._print_verbose(f'Field created: {INTERFACES_PARAMETERS[p]} [{PARAMETERS_UNITS[p]}]')
+
+        return self
+
+    def create_velocity_field(self, velocbuilder:VelocityFieldBuilder=None, 
+                                  vxconst:float=0,vzconst:float=0):
+        '''
+        Gets the `VelocityFieldBuilder` class to create the vx and vz fields within the 
+        scenario DataTree. Constant values of `vx` and `vz` can be given. 
+        This function automatically converts cm/y to m/s.
+
+        Parameters
+        ----------
+        velocbuilder:VelocityFieldBuilder
+            The previous setup of the velocity field in the boundaries. It must be 
+            already treated to avoid divergences.
+        
+        vx:float, optional
+            Value for the vx if velocbuilder is not gave.
+
+            Default is 0.
+        
+        vz:float, optional
+            Value for the vz if velocbuilder is not gave.
+
+            Default is 0.
+        '''
+    
+        vx = xr.DataArray(
+                        np.ones((self.Nz, self.Nx))*vxconst, 
+                        dims=('z', 'x'),
+                        coords={ 'x':self.x, 'z': self.z}
+                        )
+        
+        vz = xr.DataArray(
+                        np.ones((self.Nz, self.Nx))*vzconst, 
+                        dims=('z', 'x'),
+                        coords={ 'x':self.x, 'z': self.z}
+                        )
+
+        if velocbuilder is not None:
+            vx = xr.where(vx.z==0, velocbuilder.velocs.top.vx, vx)
+            vx = xr.where(vx.z==self.Lz, velocbuilder.velocs.bot.vx, vx)
+            vx = xr.where(vx.x==0, velocbuilder.velocs.left.vx, vx)
+            vx = xr.where(vx.x==self.Lx, velocbuilder.velocs.right.vx, vx)
+            
+            vz = xr.where(vz.x==0, velocbuilder.velocs.left.vz, vz)
+            vz = xr.where(vz.x==self.Lx, velocbuilder.velocs.right.vz, vz)
+            vz = xr.where(vz.z==0, velocbuilder.velocs.top.vz, vz)
+            vz = xr.where(vz.z==self.Lz, velocbuilder.velocs.bot.vz, vz)
+
+            self.DTree.fields['vx'] = vx.transpose('z','x')
+            self.DTree.fields['vz'] = vz.transpose('z','x')
+
+
+        self.DTree.fields['vx'].attrs['units'] = 'm/s'
+        self.DTree.fields['vz'].attrs['units'] = 'm/s'
+
+        self._print_verbose('Velocity field was created in the scenario builder.')
+
+        return self
+
+    def create_temperature_field(self, tempbuilder:TemperatureFieldBuilder):
+        '''
+        Gets the `TemperatureFieldBuilder` class to create the temperature field within 
+        the scenario DataTree.
+
+        Parameters
+        ----------
+        tempbuilder:TemperatureFieldBuilder
+            The previous setup of the temperature field. It must be already treated.
+        '''
+    
+        temp = xr.DataArray(
+                        np.ones((self.Nz, self.Nx))*-1, 
+                        dims=('z', 'x'),
+                        coords={ 'x':self.x, 'z': self.z}
+                        )
+
+
+        temp[:] = tempbuilder.temperature
+        
+        self.DTree.fields['temperature'] = temp
+        self.DTree.fields['temperature'].attrs['units'] = 'deg C'
+        self.DTree.fields['temperature'].attrs['t_potential'] = tempbuilder.t_pot
+        self.DTree.fields['temperature'].attrs['alpha'] = tempbuilder.alpha
+        self.DTree.fields['temperature'].attrs['c_cap'] = tempbuilder.c_cap
+
+        self._print_verbose('Temperature field was created in the scenario builder.')
+
+        self.alpha = tempbuilder.alpha
+        self.c_cap = tempbuilder.c_cap
+
+        return self
+
+
+    def calculate_litho_pressure(self, alpha:float=None, g:float=-10):
+        '''
+        Calculate the lithostatic pressure in each cell by integrating the effective density along the Z-axis. This function 
+        considers the temperature field and the parameters used in the `TemperatureFieldBuilder`. The effective density is
+        stored within the `fields`dataset as "thermal_rho". 
+        You can set a alpha=0 to disconsider thermal volumetric expansion.  
+
+        
+        P(x,z) = (Int_0->z rho_eff dz)_x * g * dz 
+
+        where rho_eff is function of the temperature field:
+
+        rho_eff(x,z) = rho(x,z) * (1 + alpha * T)
+
+        Parameters
+        ----------
+
+        alpha:float, optional
+            Volumetric thermal expansion coefficient (in K^-1). If None, the alpha from `TemperatureFieldBuilder` will be used. 
+            Default is None.
+
+        g:float, optional
+            Gravitational acceleration (in m2/s). 
+            Default is -10.0.
+        
+        '''
+
+        if alpha is None:
+            alpha = self.alpha
+            self._print_verbose(f'Using thermal expansion coefficient used in the `TemperatureFieldBuilder`: alpha={alpha}')
+            
+
+        self.DTree.fields['rho_thermal']=(self.DTree.fields.rho*(1+alpha*self.DTree.fields.temperature))
+        self.DTree.fields['rho_thermal'].rename('rho_thermal')
+        self.DTree.fields['rho_thermal'].attrs['units']='kg/m3'
+        self.DTree.fields['rho_thermal'].attrs['parameter']=''
+
+        self.DTree.fields['litho_P'] = (self.DTree.fields.rho_thermal[::-1].cumsum(axis=0,keep_attrs=False)*self.dz*g)
+        self.DTree.fields['litho_P'].rename('litho_P')
+        self.DTree.fields['litho_P'].attrs['units']='Pa'
+        self.DTree.fields['litho_P'].attrs['parameter']=''
+
+        self._print_verbose('Lithostatic pressure was calculated.')
+
+        return self
+
+    def calculate_YSE(self, plastic:str='druker-prager', viscous:str='dislocation', **kargs):
+        '''
+        Calculate the Yield Stress Envelope considering the viscoplastic rheology adopted in Mandyoc (initial and softened). 
+        Furthermore, this function creates the plastic and viscous YSE and stores it in the `fields` dataset.
+
+        See Sacek et al. (2022) and Gerya (2019) for more details.
+
+        Functions can be checked in `aux_functions.py`.
+
+        Parameters
+        ----------
+
+        plastic:str, optional
+            The plastic rheology adopted. Supported modes are `drucker-prager` and `byerlee`.
+            Default is `drucker-prager`.
+        
+        viscous:str, optional
+            The viscous rheology adopted. The only mode supported is the dislocation creep (`dislocation`).
+            Default is `dislocation`
+
+        KeyArgs
+        -------
+        
+        sr:float
+            The reference strain rate (in s^-1) used in the Arrhenius-type viscosity. 
+            If not given, is set as `1e-15`.
+
+        R:float
+            Universal gas constant. 
+            If not given, is set as `8.314`.
+        
+        alpha:float
+            Volumetric thermal expansion coefficient (in K^-1).
+            If not given, is set as `None` and the value of `TemperatureFieldBuilder` will be used.
+
+        g:float
+            Gravitational acceleration (in m2/s). 
+            If not given, is set as `-10`.
+
+        mu:float
+            Friction coefficient of Byerlee law. Only relevant if `plastic=byerlee`.
+            If not given, is set as `0.6`.
+
+        '''
+        if 'litho_P' not in self.DTree.fields:
+            alpha = kargs.get('alpha',None)
+            g = kargs.get('g',-10)
+            self.calculate_litho_pressure(alpha, g)
+
+        sr = kargs.get('sr',1e-15)
+        R = kargs.get('R',8.314)
+        TK = self.DTree.fields.temperature + 273 # K
+
+        C = self.DTree.fields.C
+        A = self.DTree.fields.A
+        V = self.DTree.fields.V
+        n = self.DTree.fields.n
+        Q = self.DTree.fields.Q
+
+        P = self.DTree.fields.litho_P
+
+        c = self.DTree.fields.cohesion_max  #cohesion initial
+        c_soft = self.DTree.fields.cohesion_min  #after strain softening
+        
+        if plastic.lower() == 'druker-prager':
+            phi = self.DTree.fields.friction_angle_max #friction angle
+            phi_soft = self.DTree.fields.friction_angle_min #after strain softening
+
+            self.DTree.fields['plastic_YSE'] = _Druker_Prager_YS(c, phi, P)
+            self.DTree.fields['plastic_YSE_soft'] = _Druker_Prager_YS(c_soft, phi_soft, P)
+
+            self.DTree.fields['plastic_YSE'].attrs['method'] = 'Druker-Prager'
+            self.DTree.fields['plastic_YSE_soft'].attrs['method'] = 'Druker-Prager'
+
+            self._print_verbose('Plastic rheology: Druker-Prager Criterion')
+
+        elif plastic.lower() == 'byerlee':
+            mu = kargs.get('mu',0.6) #generic values
+            self.DTree.fields['plastic_YSE'] = _Byerlee_law_YS(c,mu,P)
+            self.DTree.fields['plastic_YSE_soft'] = _Byerlee_law_YS(c_soft,mu,P)
+
+            self.DTree.fields['plastic_YSE'].attrs['method'] = 'Byerlee'
+            self.DTree.fields['plastic_YSE_soft'].attrs['method'] = 'Byerlee'
+            
+            self._print_verbose('Plastic rheology: Byerlee-law')
+
+        else:
+            print("Choose a valid mode for plastice criteria: 'drucker-prager' or 'byerlee'.")
+        
+        self.DTree.fields['plastic_YSE'].rename('plastic_YSE') 
+        self.DTree.fields['plastic_YSE'].attrs['units'] = 'Pa'
+        self.DTree.fields['plastic_YSE_soft'].rename('plastic_YSE_soft') 
+        self.DTree.fields['plastic_YSE_soft'].attrs['units'] = 'Pa'
+
+        if viscous.lower() == 'dislocation':
+            visc = _visc_dislocation_creep(sr,A,C,n,Q,V,P,R,TK)
+
+            self.DTree.fields['viscous_YSE'] = visc * sr
+            self.DTree.fields['viscous_YSE'].rename('viscous_YSE') 
+            self.DTree.fields['viscous_YSE'].attrs['units'] = 'Pa'
+            self.DTree.fields['viscous_YSE'].attrs['method'] = 'Dislocation creep'
+            self.DTree.fields['viscous_YSE'].attrs['strain_rate'] = sr
+            self._print_verbose('Viscous rheology: dislocation creep')
+
+        else:
+            print("The only method available in this version is 'dislocation'.")
+            print("Next versions may consider the dislocation creep mode.")
+            
+        self.DTree.fields['YSE'] = xr.where(self.DTree.fields['viscous_YSE']<self.DTree.fields['plastic_YSE'],self.DTree.fields['viscous_YSE'],self.DTree.fields['plastic_YSE'])
+        self.DTree.fields['YSE_soft'] = xr.where(self.DTree.fields['viscous_YSE']<self.DTree.fields['plastic_YSE_soft'],self.DTree.fields['viscous_YSE'],self.DTree.fields['plastic_YSE_soft'])
+
+        self.DTree.fields['YSE'].rename('YSE')
+        self.DTree.fields['YSE'].attrs['units'] = 'Pa'
+        self.DTree.fields['YSE'].attrs['strain_rate'] = sr
+
+        self.DTree.fields['YSE_soft'].rename('YSE_soft')
+        self.DTree.fields['YSE_soft'].attrs['strain_rate'] = sr
+        self.DTree.fields['YSE_soft'].attrs['units'] = 'Pa'
+
+        self._print_verbose("Yield Strength Envelopte was calculated.")
+
+        return self
+
+
+    
+
+    def export_interfaces(self, export:str='dataset'):
+        '''
+        Export the created interfaces into the "interfaces.txt" file required in Mandyoc.
+
+        Parameters
+        ----------
+
+        export : str, optional
+            Mode of saving the created interfaces into a more readable file. Support 
+            modes are 'CSV' and 'dataset' (netcdf file).
+
+            Default is `'dataset'`. 
+        '''
+
+        texts = {p: [] for p in MATERIAL_PARAMETERS}
+        dic_params = {p: [] for p in MATERIAL_PARAMETERS}
+        interfaces_list = []
+
+        interfaces_names = list(self.DTree.interfaces.ds.data_vars)
+        interfaces_names = interfaces_names[1:] + [interfaces_names[0]]
+        
+        self._print_verbose("Exporting dataset to interfaces.txt")
+        self._print_verbose(f"Interfaces: {' -> '.join(interfaces_names)}")
+
+        for name in interfaces_names:    
+            layer = self.DTree.interfaces.ds[name]
+            interface = layer.values
+            material = layer.attrs
+            for p in MATERIAL_PARAMETERS:
+                texts[p].append(str(material[p]))
+
+                if export.lower()=='csv':
+                    dic_params[p].append(material[p])
+
+            interfaces_list.append(interface)
+
+        interfaces_list = np.array(interfaces_list).T
+
+        base_text=f'''C  {"  ".join(texts['C'])}
+        rho  {"  ".join(texts['rho'])}
+        H  {"  ".join(texts['H'])}
+        A  {"  ".join(texts['A'])}
+        n  {"  ".join(texts['n'])}
+        Q  {"  ".join(texts['Q'])}
+        V  {"  ".join(texts['V'])}
+        k  {"  ".join(texts['k'])}
+        weakening_seed  {"  ".join(texts['weakening_seed'])}
+        cohesion_min  {"  ".join(texts['cohesion_min'])}
+        cohesion_max  {"  ".join(texts['cohesion_max'])}
+        friction_angle_min  {"  ".join(texts['friction_angle_min'])}
+        friction_angle_max  {"  ".join(texts['friction_angle_max'])}
+        '''
+
+        max_seq = 0
+        for line in base_text.split("\n"):
+            for seq in line.strip().split('  ')[1:]:
+                # print(seq)
+                max_seq = len(seq.strip()) if len(seq.strip()) > max_seq else max_seq
+
+        max_seq += 3
+        print(max_seq)
+        with open(os.path.join(self.path,"interfaces.txt"), "w") as f:
+            for line in base_text.split("\n")[:-1]:
+                all_seqs = line.strip().split('  ')
+                f.write(all_seqs[0].ljust(21)) # 21 spaces -> len of "friction_angle_***   "
+
+                for seq in all_seqs[1:]: # add parameters text
+                    f.write(''.join(seq).ljust(max_seq))
+
+                f.write("\n")
+
+            np.savetxt(f, interfaces_list[:,:-1], fmt="%.1f")
+
+            f.close()
+
+        if export.lower() == 'dataset':
+            self._print_verbose('Exporting interfaces to NETCDF file')
+            nc_path = os.path.join(self.path, "interfaces_parameters.nc")
+            self.DTree.interfaces.ds.to_netcdf(nc_path)
+    
+        elif export.lower() == 'csv':
+            from pandas import DataFrame
+            self._print_verbose('Exporting interfaces to CSV file')
+            dic_params['name'] = interfaces_names
+            df = DataFrame(dic_params)
+            csv_path = os.path.join(self.path, "interfaces_parameters.csv")
+            df.set_index('name').T.to_csv(csv_path, sep=';')
+            
+        return True
+
+    def export_field(self,field:str,header:str='',ind:int=0):
+        '''
+        Function to export fields in the mandyoc required format.
+        For the velocity or temperature field, this function exports the field with the 
+        appropriates name.
+
+        Parameters
+        ----------
+        field:str
+            Field to be exported. The special fields are (`velocity`,`temperature`)
+        header:str, optional
+            Comments in the header of the file. Default is ''.
+        ind:int, optional
+            Index of the exported temperature or velocity field. Default is 0.
+        '''
+        name=field
+        if len(header)==0: header='L1\nL2\nL3\nL4'
+        
+        if field == 'velocity':    
+            vx = self.DTree.fields.vx.transpose('z', 'x').values.flatten()
+            vz = self.DTree.fields.vz.transpose('z', 'x').values.flatten()
+
+            data_export = np.empty(vx.size * 2, dtype=vx.dtype)
+            data_export[0::2] = vx
+            data_export[1::2] = vz
+
+            name = f'input_velocity_{ind}'
+
+        else:
+            data = self.DTree.fields[field].transpose('z', 'x').values
+            data_export = data.flatten()
+            
+            if field=='temperature':
+                name=f'input_temperature_{ind}'
+
+        self._print_verbose(f'Exporting {field} field ({len(data_export)})')
+        np.savetxt(os.path.join(self.path,f"{name}.txt"), data_export, header=header)
+
+        return self
+    
+    def set_params(self, param_file:str='', params_str:str='', **params_dict):
+        """
+        Set parameters for the scenario. nx, nz, lx, and lz cannot be set.
+        The parameters must be set after the interfaces creation.
+        
+        Parameters
+        ----------
+        param_file:str, optional
+            File `param.txt` with the parameters.
+
+        params_str:str, optional
+            Continuous text with the parameters. 
+        
+        params_dict:dict, keyarguments
+            Dictionary with the parameters
+        """
+
+
+        temp_param = {'nx':self.Nx,
+                      'nz':self.Nz,
+                      'lx':self.Lx,
+                      'lz':-self.Lz,
+                      'dimensions':self.dimensions,
+                      'n_interfaces':len(self.DTree.interfaces)-1
+                    }
+        
+        if self.dimensions == 3:
+            temp_param['ny'] = self.Ny
+            temp_param['ly'] = self.Ly
+        
+
+        fixed_parameters = list(temp_param.keys())
+        read_input = evaluate_params(param_file, params_str, **params_dict)
+
+        for k,v in read_input.items():
+            if k in fixed_parameters:
+                self._print_verbose(f"{k} was already set in the builder.")
+                continue
+
+            elif k not in list(PARAMS_TYPES.keys()):
+                print(f'{k} is not in the current parameters list. Check the parameter or add in the param.txt file!')
+                continue
+
+            else:
+                temp_param.update({k:PARAMS_TYPES[k](v)})
+
+        # create an immutable param dict
+        self.params = MappingProxyType(temp_param)
+        return self
+
+
+    def export_params(self):
+        '''
+        Export the scenario parameters (set via `set_params`) to a text file in Mandyoc's
+        `param.txt`.
+        '''
+
+        if not hasattr(self, 'params'):
+            raise RuntimeError("Parameters not set. Call `set_params(...)` first.")
+
+        col = max(len(k) for k in self.params) + 4
+        path = os.path.join(self.path, 'param.txt')
+        with open(path, 'w') as f:
+            for key, value in self.params.items():
+                f.write(f"{key:<{col}}= {value} \n")
+            
+    
+    def plot_interfaces(self, fig:plt.Figure, axes:plt.Axes, mode:str='fill'):
+
+        return fig, axes
+
+
+
+class VelocityFieldBuilder:
+
+    def __init__(self, scenarioBuilder:MandyocBuilder, units='cm/y'):
+        '''
+        Class to build a correctly and conservative velocity field for a mandyoc scenario.
+        
+        The basic workflow of this class is:
+        (1) Initialize the VelocityFieldBuilder with your current scenario;
+        (2) Set velocities using `set_region` or `linear_velocity` functions;
+        (3) Check the field conservation using the function `integrate_normal_components`;
+        (4) Apply the velocity correction using the function `conservate_veloc`. You may 
+            need to repeat this step until the tolerance divergence is reached;
+        (5) Brief visualize the velocities with `view_veloc`.
+
+        Parameters
+        ----------
+
+        scenarioBuilder: MandyocBuilder
+            The scenario that will recieve the velocity field. The VelocityFieldBuilder will 
+            get all parameters and attributes from the scenario class.
+        
+        units: str, optional
+            The units of the velocity field. It must be 'cm/y' or 'm/s'.
+
+            Default is 'cm/y'.
+
+        Attributes
+        ----------
+        scenario: MandyocBuilder
+        Nx: int
+        Nz: int
+        Lx: float
+        Lz: float
+        x: numpy.ndarray
+        z: numpy.ndarray
+        boundaries: list
+        velocs: xarray.DataTree
+        units: str
+
+        Ny: int
+        Ly: float
+        y: numpy.ndarray
+
+        '''
+        self.scenario = scenarioBuilder
+
+        self.Nx = scenarioBuilder.Nx
+        self.Nz = scenarioBuilder.Nz
+        self.Lx = scenarioBuilder.Lx
+        self.Lz = scenarioBuilder.Lz
+
+        self.x = scenarioBuilder.x
+        self.z = scenarioBuilder.z
+
+        self.dx = scenarioBuilder.dx
+        self.dz = scenarioBuilder.dz
+
+        self.boundaries = ['left','right','top','bot']
+        #self.velocs = xr.Dataset(dims=('x','z'),coords={'x':self.x, 'z':self.z})
+
+        baseZ_array = xr.DataArray((np.zeros(self.Nz)),dims=('z'),coords={'z':self.z})
+        baseX_array = xr.DataArray((np.zeros(self.Nx)),dims=('x'),coords={'x':self.x})
+
+        self.velocs = DataTree.from_dict( {'left':xr.Dataset({'vx':baseZ_array,'vz':baseZ_array},coords={'z':self.z}),
+                             'right':xr.Dataset({'vx':baseZ_array,'vz':baseZ_array},coords={'z':self.z}),
+                             'top':xr.Dataset({'vx':baseX_array,'vz':baseX_array},coords={'x':self.x}),
+                             'bot':xr.Dataset({'vx':baseX_array,'vz':baseX_array},coords={'x':self.x})}
+                             )
+        
+
+        if scenarioBuilder.dimensions == 3:
+            self.Ny = scenarioBuilder.Ny
+            self.Ly = scenarioBuilder.Ly 
+            self.y = scenarioBuilder.y
+            self.dy = self.y[1] - self.y[0]
+
+            self.boundaries.append('front')
+            self.boundaries.append('back')
+
+            # The 3D still have to be implemented
+
+        self.unifac = 1
+        self.unifac_len = 1 # for lengths
+        self.unifac_int = 1 # for integrals
+        self.units = units
+
+        if units == 'cm/y':
+            print("Velocity is given in cm/y. The field will be automatically converted to m/s")
+            self.unifac_len = 100 # m to cm
+            self.unifac = 0.01/SEC_PER_YEAR # cm/y to m/s 
+            self.unifac_int = 1e4 * SEC_PER_YEAR # m2/s to cm2/y 
+        elif units != 'm/s':
+            print(f"{units} is not a valid unit for the velocity field.")
+            self.unifac = 1
+
+        scenarioBuilder._print_verbose(f'The velocity builder was created.')
+
+    def set_region(self, boundary:str, range:list|tuple|np.ndarray, vx=None, vz=None, mode:str='set'):
+        '''
+        This function set or add a constant velocity in a region of the selected boundary.
+
+        Parameters
+        ----------
+        boundary: str
+            The boundary that you recieve the imposed velocity ('top','bot','left','right).
+
+        range: list|tuple|np.ndarray
+            The min and max values on the given boundary, such as [XMIN,XMAX] or [ZMIN,ZMAX].
+
+        vx: float, optional
+            The velocity in the Vx component.
+
+            Default is None.
+
+        vz: float, optional
+            The velocity in the Vz component.
+
+            Default is None.
+        
+        mode: str, optional
+            The mode that the velocity will be applied: 'add' or 'set'.
+            
+            Default is 'set'.
+        '''
+        mask = self._create_mask(values_range=range, boundary=boundary)
+
+        self._apply_veloc(mask, boundary, vx, vz, mode)
+
+        if vx is None: vx = 0
+        if vz is None: vz = 0
+        self.scenario._print_verbose(f'({mode}) velocity in the {boundary}: from [{range[0]:.1f},{range[1]:.1f}], vx={vx:.3e}, vz={vz:.3e} {self.units}')
+
+        return self
+
+    def linear_velocity(self, boundary:str, v_component:str, range:list|tuple|np.ndarray=None, 
+                        clims:list|tuple|np.ndarray=None, vlims:list|tuple|np.ndarray=None, 
+                        coef:float=None, b:float=None, mode:str='set'):
+        '''
+        This function apply a linear velocity function in a range of the selected boundary.
+        
+        V = a * COORD + b
+
+        The user can give the limits and the velocities to calculate `a` and `b` or give 
+        these parameters directly.  
+
+        Parameters
+        ----------
+        boundary: str
+            The boundary that you recieve the imposed velocity ('top','bot','left','right).
+
+        v_component: str
+            Which velocity component are being set ('vx' or 'vz').
+            
+        range: list|tuple|numpy.ndarray
+            The min and max values on the given boundary to apply the velocities, such 
+            as [XMIN,XMAX] or [ZMIN,ZMAX].
+
+        clims: list|tuple|numpy.ndarray, optional
+            The min and max values in the coordinate to calculate the line slope, such 
+            as [XMIN,XMAX] or [ZMIN,ZMAX]. If None, `coef` and `b` must be given. 
+
+            Default is None.
+
+        vlims: list|tuple|numpy.ndarray, optional
+            The velocity values in the coordinates given in `clims`. 
+            If None, `coef` and `b` must be given. 
+
+            Default is None.
+        
+        coef: float, optional
+            The slope of the function. 
+
+            Default is None.
+
+        b: float, optional
+            The constant of the function. 
+
+            Default is None.
+
+        mode: str, optional
+            The mode that the velocity will be applied: 'add' or 'set'.
+            
+            Default is 'set'.
+        '''
+
+        if coef is None: # calculate the slope coeficient
+            coef = (vlims[1]-vlims[0])/(clims[1]-clims[0])
+            
+            if b is None: # the linear constant
+                b = vlims[1] - coef * clims[1]
+
+        else: # user gives the coeficient 
+            if b is None: b = 0.0
+
+
+        varying_coord = self._evaluate_bound(boundary)
+        veloc = coef * varying_coord + b
+
+        self.scenario._print_verbose(f'linear velocity in the {boundary} boundary: {v_component} = {coef:.3e} * COORD + {b:.3e}')
+
+        
+        mask = self._create_mask(values_range=range, boundary=boundary)
+
+        if v_component == 'vz':
+            self._apply_veloc(mask, boundary, None, veloc, mode)
+        elif v_component == 'vx':
+            self._apply_veloc(mask, boundary, veloc, None, mode)
+        
+        return self
+
+    def _create_mask(self, values_range, boundary):
+        ''' 
+        Internal method to get the masked interval
+        '''
+        if values_range is None:
+            if boundary in ['top','bot']:
+                values_range = [self.x.min(), self.x.max()]
+            else:
+                values_range = [self.z.min(), self.z.max()]
+
+        if boundary in ['top','bot']:
+            xmin, xmax = values_range
+            mask = (self.velocs[boundary].x >= xmin) & (self.velocs[boundary].x <= xmax)
+
+        elif boundary in ['left','right']:
+            zmin,zmax = values_range
+            mask = (self.velocs[boundary].z >= zmin) & (self.velocs[boundary].z <= zmax)
+
+        return mask
+
+    def integrate_normal_components(self):
+        '''
+        Gives outflux integration (of the normal components) of the velocity field by:
+
+            Int V•n dS = [ Int Vx(x=Lx) dz - Int Vx(x=0) dz ] + [Int Vz(0) dx - Int Vz(Lz) dx ]
+
+        returns: float
+            Return the outflux.
+        '''
+
+        left_vx = self.velocs['left'].vx.sortby('z')
+        right_vx = self.velocs['right'].vx.sortby('z')
+        top_vz = self.velocs['top'].vz.sortby('x')
+        bot_vz = self.velocs['bot'].vz.sortby('x')
+
+        outflux_l = -left_vx.integrate("z")
+        outflux_r = right_vx.integrate("z")
+
+        outflux_t = top_vz.integrate("x")
+        outflux_b = -bot_vz.integrate("x")
+
+        sum_outflux = outflux_l + outflux_r + outflux_t + outflux_b
+        self.scenario._print_verbose(f"Int V = {sum_outflux.values:.3e} m²/s")
+        
+        return float(sum_outflux.values)
+
+    def conservate_veloc(self,boundary:str='bot', correction_factor:float=1.0):
+        '''
+        Apply the divergence of the velocity field, or a fraction of it, field into 
+        a whole boundary. 
+
+        Parameters
+        ----------
+        boundary: str
+            The boundary that you recieve the imposed velocity ('top','bot','left','right).
+        
+        correction_factor: float
+            The fraction of correction to be applied. Should be: 0.0 < CF <= 1.0.
+
+            Default is 1.0.
+        '''
+
+        v_exc = self.integrate_normal_components() * self.unifac_int
+        target_flux = -v_exc * correction_factor
+
+            
+        if boundary in ['bot', 'top']:
+            normal = 1 if boundary == 'top' else -1
+            ranges = [self.x.min()+1.5*self.dx, self.x.max()-1.5*self.dx]
+            width = (self.Lx-3*self.dx) * self.unifac_len
+            vz_compensation = (target_flux / width) * normal
+            
+            # self.scenario._print_verbose(f"Applying compensating Vz = {vz_compensation:.3e} to the {boundary} boundary")
+            self.set_region(boundary, ranges, vz=vz_compensation, mode='add')
+        
+
+        elif boundary in ['left', 'right']:
+            normal = 1 if boundary == 'right' else -1
+            ranges = [self.z.min()+1.5*self.dz, self.z.max()-1.5*self.dz]
+            width = (self.Lz-3*self.dz) * self.unifac_len
+            vx_compensation = (target_flux / width) * normal
+                       
+            # self.scenario._print_verbose(f"Applying compensating Vx = {vx_compensation:.3e} to the {boundary} boundary")
+            self.set_region(boundary, ranges, vx=vx_compensation, mode='add')
+        
+        return self
+
+    def _evaluate_bound(self,boundary):
+        '''
+        Internal method to evaluate which coordinates (x or z) must to be used
+        '''
+        if boundary in ['left', 'right']:
+            varying_coord = self.z
+        elif boundary in ['top', 'bot']:
+            varying_coord = self.x
+        else:
+            raise ValueError(f"Unknown boundary: {boundary}")
+
+        return varying_coord
+
+    def _apply_veloc(self, mask, boundary, vx, vz, mode='set'):
+        '''
+        Internal method to apply the velocity into a range, using a mask and a mode.
+        '''
+        if mode not in ['set', 'add']:
+            raise ValueError(f"Invalid mode '{mode}'. Use 'set' or 'add'.")
+
+        if vx is not None:
+
+            if mode == 'add':
+                new_vx = self.velocs[boundary]['vx'] + vx*self.unifac
+            else:
+                new_vx = vx*self.unifac
+            
+            self.velocs[boundary]['vx'] = xr.where(mask, new_vx, self.velocs[boundary]['vx'])
+
+        if vz is not None:
+
+            if mode == 'add':
+                new_vz = self.velocs[boundary]['vz'] + vz*self.unifac
+            else:
+                new_vz = vz*self.unifac
+                
+            self.velocs[boundary]['vz'] = xr.where(mask, new_vz, self.velocs[boundary]['vz'])
+
+        return self
+
+    def view_veloc(self):
+        '''
+        Function to plot the velocities in the boundaries.
+        The first figure represents the left and right, and the second the top and bot boundaries. 
+
+        returns: (plt.Figure, plt.Figure)
+        '''
+
+        # LEFT AND RIGHT PLOTS
+        fig1, axslr = plt.subplots(1,2, sharex=True, sharey=True)
+        
+        zplot = self.z
+
+        vxplotR = self.velocs.right.vx.values / self.unifac
+        vzplotR = self.velocs.right.vz.values / self.unifac
+
+        vxplotL = self.velocs.left.vx.values / self.unifac
+        vzplotL = self.velocs.left.vz.values / self.unifac
+
+        axslr[0].plot(vzplotL,zplot,color='red',label='vz')
+        axslr[0].plot(vxplotL,zplot,color='black',label='vx')
+        
+
+        axslr[1].plot(vzplotR,zplot,color='red',label='vz')
+        axslr[1].plot(vxplotR,zplot,color='black',label='vx')
+        
+                
+        axslr[0].set_title('left')
+        axslr[1].set_title('right')
+        axslr[0].legend()
+        axslr[0].set_xlabel(f'vel. [{self.units}]')
+        axslr[1].set_xlabel(f'vel. [{self.units}]')
+        axslr[0].set_ylabel('z [m]')
+
+        axslr[0].grid()
+        axslr[1].grid()
+
+
+        # TOP AND BOT PLOTS
+        fig2, axstb = plt.subplots(2,1, sharex=True, sharey=True)
+        xplot = self.x
+        
+        vxplotT = self.velocs.top.vx.values / self.unifac
+        vzplotT = self.velocs.top.vz.values / self.unifac
+
+        vxplotB = self.velocs.bot.vx.values / self.unifac
+        vzplotB = self.velocs.bot.vz.values / self.unifac
+
+        axstb[0].plot(xplot, vxplotT, color='black',label='vx')
+        axstb[0].plot(xplot, vzplotT, color='red',label='vz')
+
+        axstb[1].plot(xplot, vxplotB, color='black',label='vx')
+        axstb[1].plot(xplot, vzplotB, color='red',label='vz')
+
+        axstb[0].set_title('top')
+        axstb[1].set_title('bot')
+        axstb[0].legend()
+
+        axstb[1].set_ylabel(f'vel. [{self.units}]')
+        axstb[0].set_ylabel(f'vel. [{self.units}]')
+        axstb[1].set_xlabel('x [m]')
+
+        axstb[0].grid()
+        axstb[1].grid()
+
+
+        print(f'Int V•dS = {self.integrate_normal_components():.3f} m²/s')
+
+        return fig1,fig2
+
+
+class TemperatureFieldBuilder:
+    
+    '''
+    Constructs the 2D thermal field for Mandyoc scenarios, using the created spatial grid 
+    and material data structures.
+
+    Parameters
+    ----------
+    scenarioBuilder: MandyocBuilder
+        The primary scenario instance containing grid geometry and pre-populated material 
+        property fields.
+
+    c_cap: float, optional
+        Specific heat capacity (in J/(kg K)). Defaults to 1250.0.
+
+    g: float, optional
+        Gravitational acceleration (in m2/s). 
+        Default is -10.0.
+
+    alpha: float, optional
+        Volumetric thermal expansion coefficient (in K^-1). 
+        Default is 3.28e-5.
+
+    Attributes
+    ----------
+
+    scenario: MandyocBuilder
+        Reference pointer to the parent scenario builder.
+
+    Nx, Nz: int
+        Number of computational nodes in the x (horizontal) and z (vertical) directions.
+
+    Lx, Lz: float
+        Total physical dimensions of the domain along the x and z axes.
+
+    x, z: array-like
+        1D spatial coordinate arrays.
+
+    thick_air: float
+        Vertical thickness of the upper sticky air boundary layer.
+
+    g, alpha, c_cap: float 
+        Stored physical constants governing thermomechanical behavior.
+
+    rho: xarray.DataArray 
+        2D spatial density field mapped from the scenario tree.
+
+    kappa: xarray.DataArray
+        2D spatial thermal diffusivity field mapped from the scenario tree.
+
+    H: xarray.DataArray 
+        2D spatial radiogenic heat production field mapped from the scenario tree.
+
+    k_cond: xarray.DataArray 
+        2D thermal conductivity field, automatically computed upon initialization 
+        as the product of kappa, rho, and c_cap.
+
+    temperature: xarray.DataArray 
+        2D thermal field array of shape (Nx, Nz) initialized to 0.0. Coordinates are 
+        mapped to x and z, with internal attributes explicitly defining units as 'deg C'.
+
+    z_corr: xarray.DataArray
+        Vertical coordinates vertically offset by the sticky air thickness (z + thick_air) 
+        to evaluate true structural depth from the geological surface.
+
+    XX, ZZ (numpy.ndarray)
+        2D spatial coordinate meshgrids generated from x and z_corr. Used for fast 
+        vectorized matrix masking, boolean logic, and depth-dependent numerical conditions.
+    '''
+
+    def __init__(self, scenarioBuilder:MandyocBuilder, 
+                 c_cap:float=1250.0,g:float=-10.0,alpha:float=3.28e-5):
+
+
+        self.scenario = scenarioBuilder
+        
+        self.Nx = scenarioBuilder.Nx
+        self.Nz = scenarioBuilder.Nz
+        self.Lx = scenarioBuilder.Lx
+        self.Lz = scenarioBuilder.Lz
+
+        self.x = scenarioBuilder.x
+        self.z = scenarioBuilder.z
+        self.thick_air = scenarioBuilder.thick_air
+
+        self.dx = scenarioBuilder.dx
+        self.dz = scenarioBuilder.dz
+
+        self.g = g
+        self.alpha = alpha
+        self.c_cap = c_cap
+        
+        self.rho = scenarioBuilder.DTree.fields.rho
+        self.kappa = scenarioBuilder.DTree.fields.k
+        self.H = scenarioBuilder.DTree.fields.H
+        self.k_cond = self.kappa*self.rho*self.c_cap
+        
+        self.temperature = xr.DataArray(np.zeros((self.Nz,self.Nx),np.float64),
+                                     dims=('z','x'),
+                                     coords={'x':self.x,'z':self.z})
+        
+        self.temperature.attrs['units']='deg C'
+        
+        self.z_corr = (self.temperature.z + self.thick_air)
+        self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
+
+
+    def apply_basic_temperature(self, lithosphere_thickness:float,t_pot:float=1350.0,):
+        '''
+        This function initiate the temperature field combining a linear gradient within the 
+        lithosphere and an adiabatic gradient in the mantle.
+
+        Future implementations: make it for each column based on the interface names instead 
+        assuming a constant lithosphere.
+
+        Parameters
+        ----------
+        lithosphere_thickness: float
+            The vertical thickness of the lithosphere used to calculate the initial 
+            linear thermal gradient.
+
+        t_pot: float, optional
+            The potential temperature of the asthenosphere/mantle boundary.
+            
+            Default is 1350.0.
+        '''
+        self.t_pot = t_pot
+        self.lithosphere_thickness = lithosphere_thickness
+        self.temperature[:,:] = (t_pot)/lithosphere_thickness * -self.ZZ
+        temp_adiabatic = t_pot / np.exp(self.g * self.alpha * -self.ZZ / self.c_cap)
+        
+
+        self.temperature = xr.where(self.temperature < 0, 0.0,self.temperature)
+        self.temperature = xr.where(self.temperature>temp_adiabatic,temp_adiabatic,self.temperature)
+
+    # this function needs improvement, it's too slow. maybe I should solve the heat equation by an implicit method
+    def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
+        '''
+        This function solves the 2D transient heat diffusion equation over a specified maximum 
+        time, using a Numba-optimized finite difference loop.
+
+        This function is very slow for medium-fine grids, it still need improvements.
+
+        Parameters
+        ----------
+        time_max: float
+            The total simulation time in years for the heat diffusion process.
+
+        dt_years: float, optional
+            The time step size in years. If it is 0.0 or exceeds the numerical stability 
+            (CFL) limit, the function will automatically cap it to a stable maximum.
+            
+            Default is 0.0.
+        '''
+        import numpy as np
+        
+        # Convert dt from years to seconds to match SI units
+        
+        dt = dt_years * SEC_PER_YEAR
+        num_steps = int(time_max / dt_years)
+
+        # Extract raw numpy arrays from xarray DataArrays for computation speed
+        T = self.temperature.transpose('x', 'z').values
+        kappa = self.kappa.transpose('x', 'z').values
+        H = self.H.transpose('x', 'z').values
+        
+        # Grid spacing
+        dx = abs(self.dx)
+        dz = abs(self.dz)
+        
+        # Ensure numerical stability (CFL condition)
+        kappa_max = np.max(kappa)
+        dt_max = (dx**2 * dz**2) / (2 * kappa_max * (dx**2 + dz**2))            
+
+        cond = (-self.ZZ.T >= (-self.lithosphere_thickness)) & (-self.ZZ.T <= 0)
+
+        if (dt > dt_max) or (dt_years<=0):
+            
+            # Automatically cap the timestep to the maximum stable limit to prevent explosion
+            dt = dt_max * 0.95
+            num_steps = int((time_max * SEC_PER_YEAR) / dt)
+
+        self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
+        self.scenario._print_verbose(f"{num_steps} steps to run.")
+
+        T = _numba_diffusion_loop(
+            T, kappa, H, self.c_cap, dx, dz, dt, num_steps, cond
+        )
+
+        # Push updated values back to the DataArray
+        if self.temperature.dims == ('z', 'x'):
+            self.temperature.values = T.T
+        else:
+            self.temperature.values = T
+
+
+    def solve_heat_diffusion1D(self, time_max: float, dt_years: float=0.0, x_inx:int=0):
+        '''
+        This function solves the 1D transient heat diffusion equation on a single vertical 
+        column and replicates the resulting thermal profile across the entire 2D domain.
+
+        Future implementations: Apply this calculated profile in a determined range instead in 
+        the whole scenario. However, it is possible to create more than one temperature builder
+        and to filter the thermal field, applying both builders in differente regions.  
+
+        Parameters
+        ----------
+        time_max: float
+            The total simulation time in years for the 1D heat diffusion process.
+
+        dt_years: float, optional
+            The time step size in years. If it is 0.0 or exceeds the numerical stability limit, 
+            the function will automatically compute and apply a stable time step.
+            
+            Default is 0.0.
+
+        x_inx: int, optional
+            The index along the x-axis from which the 1D vertical column is extracted 
+            for the calculation.
+            
+            Default is 0.
+        '''
+        
+        dt = dt_years * SEC_PER_YEAR
+        num_steps = int(time_max / dt_years)
+        print(f"Running {num_steps} iterations for 1D profile...")
+        
+        # 1. Extract 1D profiles (using the first column at x=0)
+        # We use .isel() to safely slice the xarray without assuming axis order
+        T_1d = self.temperature.isel(x=x_inx).values.copy()
+        kappa_1d = self.kappa.isel(x=x_inx).values.copy()
+        H_1d = self.H.isel(x=x_inx).values.copy()
+
+        cond = (self.z_corr.values >= (-self.lithosphere_thickness)) & (self.z_corr.values < 0)
+        # print(f'z>{(-self.lithosphere_thickness)}')
+        # print(f'z<{0}')
+        # print(self.z_corr[cond])
+        
+        dz = abs(self.dz)
+        
+        # 2. CFL Condition (1D limit is less restrictive than 2D)
+        kappa_max = np.max(kappa_1d)
+        dt_max = (dz**2) / (2 * kappa_max)
+        
+        if dt > dt_max:
+            print(f"Warning: Input dt exceeds 1D stable limit ({dt_max/SEC_PER_YEAR:.2e} yrs).")
+            dt = dt_max * 0.99
+            num_steps = int((time_max * SEC_PER_YEAR) / dt)
+
+        self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
+        self.scenario._print_verbose(f"{num_steps} steps to run.")
+        
+        # 3. 1D Finite Difference Loop
+        for step in range(num_steps):
+            T_new = np.copy(T_1d)
+            
+            # Derivatives along the Z-axis
+            dT_dz = (T_1d[2:] - T_1d[:-2]) / (2 * dz)
+            dK_dz = (kappa_1d[2:] - kappa_1d[:-2]) / (2 * dz)
+            d2T_dz2 = (T_1d[2:] - 2 * T_1d[1:-1] + T_1d[:-2]) / (dz**2)
+            
+            # Diffusion term
+            diffusion_z = kappa_1d[1:-1] * d2T_dz2 + dK_dz * dT_dz
+            
+            # Forward Euler update
+            T_new[1:-1] = T_1d[1:-1] + dt * (diffusion_z + H_1d[1:-1] / self.c_cap)
+            
+            # Boundary Conditions (Dirichlet: Fixed temperatures at top and bottom)
+            T_new[0] = T_1d[0]
+            T_new[-1] = T_1d[-1]
+            
+            T_1d = np.where(cond, T_new, T_1d)
+            
+        # 4. Replicate and map back to 2D
+        nx = len(self.x)
+        
+        # Verify the dimensions of the host DataArray to broadcast correctly
+        if self.temperature.dims == ('z', 'x'):
+            # Tile T_1d into columns: shape becomes (nz, nx)
+            T_2d = np.tile(T_1d[:, np.newaxis], (1, nx))
+        else:
+            # Tile T_1d into rows: shape becomes (nx, nz)
+            T_2d = np.tile(T_1d, (nx, 1))
+            
+        self.temperature.values = T_2d
