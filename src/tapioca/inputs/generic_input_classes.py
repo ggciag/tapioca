@@ -12,6 +12,7 @@ from xarray import DataTree
 
 from .._variables import VARS_TYPES, PARAMS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
 from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
+from .builder_functions import get_interface
 
 __all__ = ['MandyocBuilder','TemperatureFieldBuilder','VelocityFieldBuilder']
 
@@ -1429,10 +1430,11 @@ class TemperatureFieldBuilder:
         self.g = g
         self.alpha = alpha
         self.c_cap = c_cap
-        
-        self.rho = scenarioBuilder.DTree.fields.rho
-        self.kappa = scenarioBuilder.DTree.fields.k
-        self.H = scenarioBuilder.DTree.fields.H
+
+        self.interfaces = scenarioBuilder.DTree.interfaces.ds.copy()
+        self.rho = scenarioBuilder.DTree.fields.rho.copy()
+        self.kappa = scenarioBuilder.DTree.fields.k.copy()
+        self.H = scenarioBuilder.DTree.fields.H.copy()
         self.k_cond = self.kappa*self.rho*self.c_cap
         
         self.temperature = xr.DataArray(np.zeros((self.Nz,self.Nx),np.float64),
@@ -1445,7 +1447,8 @@ class TemperatureFieldBuilder:
         self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
 
 
-    def apply_basic_temperature(self, lithosphere_thickness:float,t_pot:float=1350.0,):
+    def apply_basic_temperature(self, lithosphere_interface:str|int, surface_interface:str|int=None,
+                                t_pot:float=1350.0):
         '''
         This function initiate the temperature field combining a linear gradient within the 
         lithosphere and an adiabatic gradient in the mantle.
@@ -1465,13 +1468,23 @@ class TemperatureFieldBuilder:
             Default is 1350.0.
         '''
         self.t_pot = t_pot
-        self.lithosphere_thickness = lithosphere_thickness
-        self.temperature[:,:] = (t_pot)/lithosphere_thickness * -self.ZZ
+
+        self.lithosphere_interface = get_interface(self.interfaces,lithosphere_interface)
+        self.surface_interface = get_interface(self.interfaces,surface_interface)
+
+        self.lithosphere_thickness = self.surface_interface - self.lithosphere_interface
+        for j in range(self.Nx):
+            self.temperature[:,j] = float((t_pot)/self.lithosphere_thickness[j]) * -self.ZZ[j]
+
         temp_adiabatic = t_pot / np.exp(self.g * self.alpha * -self.ZZ / self.c_cap)
         
 
         self.temperature = xr.where(self.temperature < 0, 0.0,self.temperature)
         self.temperature = xr.where(self.temperature>temp_adiabatic,temp_adiabatic,self.temperature)
+        
+        self.temperature.attrs['units'] = 'deg C'
+
+        return self
 
     # this function needs improvement, it's too slow. maybe I should solve the heat equation by an implicit method
     def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
@@ -1534,6 +1547,8 @@ class TemperatureFieldBuilder:
             self.temperature.values = T
 
 
+
+    # The numerical solve should be rewritten to use thermal conductivity rather than diffusivity
     def solve_heat_diffusion1D(self, time_max: float, dt_years: float=0.0, x_inx:int=0):
         '''
         This function solves the 1D transient heat diffusion equation on a single vertical 
@@ -1570,8 +1585,9 @@ class TemperatureFieldBuilder:
         T_1d = self.temperature.isel(x=x_inx).values.copy()
         kappa_1d = self.kappa.isel(x=x_inx).values.copy()
         H_1d = self.H.isel(x=x_inx).values.copy()
+        lithosphere_thickness = self.lithosphere_thickness.isel(x=x_inx).values.copy()
 
-        cond = (self.z_corr.values >= (-self.lithosphere_thickness)) & (self.z_corr.values < 0)
+        cond = (self.z_corr.values >= (-lithosphere_thickness)) & (self.z_corr.values < 0)
         # print(f'z>{(-self.lithosphere_thickness)}')
         # print(f'z<{0}')
         # print(self.z_corr[cond])

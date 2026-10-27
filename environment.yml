@@ -7,7 +7,6 @@ dependencies:
   - pip
   - matplotlib
   - xarray >= 2025
-  - pyvista
   - pythreejs
   - jupyterlab
   - ipython
@@ -15,8 +14,6 @@ dependencies:
   - numpy 
   - ipyvtklink
   - shapely
-  - astropy
-  - pymp-pypi
   - numba
   - h5netcdf
   - dask
