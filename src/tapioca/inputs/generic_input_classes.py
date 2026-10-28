@@ -1341,7 +1341,6 @@ class VelocityFieldBuilder:
         return fig1,fig2
 
 
-## The documentation of this class is outdated
 class TemperatureFieldBuilder:
     
     '''
@@ -1717,6 +1716,7 @@ class TemperatureFieldBuilder:
 
         return self
 
+    ## Future development: fix the bot boundary condition in T(z=0) instead T(z=litho)
     def solve_heat_2D(self):
         """
         Solve the steady-state 2D heat equation over the lithospheric domain.
