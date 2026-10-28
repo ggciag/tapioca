@@ -4,6 +4,9 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+
 from pathlib import Path
 
 from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARAMS_TYPES
@@ -236,6 +239,67 @@ def _numba_diffusion_loop(T, kappa, H, c_cap, dx, dz, dt, num_steps, cond):
             
     return T
 
+def spsolve_heat_col(T, k_nodes, H, Tsurf, Tlab, dz):
+    """
+    This function solves the 1D steady state heat diffusion equation on a single vertical 
+    column. The formulation is:
+
+    dT/dt = d/dz (k dT/dz) + H 
+
+    Parameters
+    ----------
+    T : ndarray
+        1D array of the temperature profile. In this steady-state solver, its values 
+        are not used for computation, just dictates the number of nodes (N = len(T)).
+    k_nodes : ndarray
+        1D array of thermal conductivities at the nodes. 
+        Must be of length N.
+    H : ndarray
+        1D array of volumetric radiogenic heat production (W/m^3) at each node. 
+        Must be of length N.
+    Tsurf : float
+        Temperature boundary condition. Note: In the current implementation, this 
+        is applied to the bottom node (index -1).
+    Tlab : float
+        Temperature boundary condition. Note: In the current implementation, this 
+        is applied to the top node (index 0).
+    dz : float
+        Vertical spacing between nodes (meters).
+
+    Returns
+    -------
+    ndarray
+        1D array of length N containing the solved steady-state temperature profile.
+    """
+
+    k = 2* (k_nodes[:-1] * k_nodes[1:]) / (k_nodes[1:] + k_nodes[:-1])
+    coeffs = k / (dz **2)
+    N = len(T)
+    
+    # k_{i+1/2} / dz**2
+    lower_diag = np.copy(coeffs) 
+    upper_diag = np.copy(coeffs)
+    
+    main_diag = np.zeros(N)
+    d = -np.copy(H) 
+
+    # -( (k_{i+1/2} + k_{i-1/2})/dz**2 )
+    main_diag[1:-1] = -(coeffs[:-1]+coeffs[1:])
+
+    # Boundary conditions
+    main_diag[0] = 1.0
+    upper_diag[0] = 0.0
+    d[0] = Tlab # T surface
+
+    main_diag[-1] = 1.0
+    lower_diag[-1] = 0.0
+    d[-1] = Tsurf
+
+    # Assemble the sparse matrix (-1: lower diagonal, 0:main diag, 1:upper diagonal)
+    A = sp.diags([lower_diag, main_diag, upper_diag], [-1, 0, 1], format='csc')
+    T = spla.spsolve(A, d) # A*T=d
+    return T
+
 def _Druker_Prager_YS(c:float, Phi:float, P:float):
     '''
     Gives the plastic Yield Stress (in Pa) according to the Druker-Prager criterion:
@@ -270,6 +334,37 @@ def _visc_dislocation_creep(strain_rate:float, A:float, C:float, n:float, Q:floa
 
     return C * A**(-1./n) * strain_rate**((1.0-n)/n)*np.exp((Q + V*P)/(n*R*T))
 
+
+def get_interface(interfaces_ds, reference:str|int):
+    """
+    Get a scenario builder (`MandyocBuilder`) and return an interface 
+    DataArray by id (int) or name (str).
+    
+    
+    Parameters
+    ----------
+    interfaces_ds: xr.Dataset
+        The dataset with all interfaces
+
+    reference: str or int
+        The reference to get the interface. If is a string, gets by name, 
+        if is a int, gets by ID.
+    Return
+    ------
+    xr.DataArray
+        The selected interface (Nx).
+    """
+
+    if isinstance(reference, str):
+        if reference not in interfaces_ds.data_vars:
+            raise KeyError(f"Interface '{reference}' not found.")
+        return interfaces_ds[reference]
+
+    elif isinstance(reference, (int, np.integer)):
+        for var in interfaces_ds.data_vars:
+            if int(interfaces_ds[var].attrs.get('id', -999)) == int(reference):
+                return interfaces_ds[var]
+            
 #====== OLD/DEPRECATED FUNCTIONS ======
 
 def _old_get_rank(cdir:str) -> int:

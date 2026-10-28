@@ -11,8 +11,7 @@ import xarray as xr
 from xarray import DataTree
 
 from .._variables import VARS_TYPES, PARAMS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
-from .builder_functions import get_interface
+from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, spsolve_heat_col, get_interface, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
 
 __all__ = ['MandyocBuilder','TemperatureFieldBuilder','VelocityFieldBuilder']
 
@@ -1351,6 +1350,14 @@ class TemperatureFieldBuilder:
         The primary scenario instance containing grid geometry and pre-populated material 
         property fields.
 
+    lithosphere_interface: str or int
+        The name or ID that indicate the Lithosphere-Asthenosphere Boundary (LAB)
+    
+    surface_interface: str or int
+        The name or ID that indicate the Crust-Air interface. If None, gets the interface below the air.
+        
+        Default is None.
+
     c_cap: float, optional
         Specific heat capacity (in J/(kg K)). Defaults to 1250.0.
 
@@ -1405,11 +1412,13 @@ class TemperatureFieldBuilder:
         to evaluate true structural depth from the geological surface.
 
     XX, ZZ (numpy.ndarray)
-        2D spatial coordinate meshgrids generated from x and z_corr. Used for fast 
+        2D spatial coordinate meshgrids generated from x and z. Used for fast 
         vectorized matrix masking, boolean logic, and depth-dependent numerical conditions.
+        ZZ is corrected to the air surface along x axis.
     '''
 
     def __init__(self, scenarioBuilder:MandyocBuilder, 
+                 lithosphere_interface:str|int, surface_interface:str|int=None,
                  c_cap:float=1250.0,g:float=-10.0,alpha:float=3.28e-5):
 
 
@@ -1435,7 +1444,16 @@ class TemperatureFieldBuilder:
         self.rho = scenarioBuilder.DTree.fields.rho.copy()
         self.kappa = scenarioBuilder.DTree.fields.k.copy()
         self.H = scenarioBuilder.DTree.fields.H.copy()
+        self.H_vol = self.H * self.rho
         self.k_cond = self.kappa*self.rho*self.c_cap
+
+        if surface_interface == None:
+            surface_interface = len(self.interfaces) - 2 #getting the penultimate interface as surface
+
+        self.lithosphere_interface = get_interface(self.interfaces,lithosphere_interface)
+        self.surface_interface = get_interface(self.interfaces,surface_interface)
+
+        self.lithosphere_thickness = self.surface_interface - self.lithosphere_interface
         
         self.temperature = xr.DataArray(np.zeros((self.Nz,self.Nx),np.float64),
                                      dims=('z','x'),
@@ -1443,38 +1461,28 @@ class TemperatureFieldBuilder:
         
         self.temperature.attrs['units']='deg C'
         
-        self.z_corr = (self.temperature.z + self.thick_air)
-        self.XX, self.ZZ = np.meshgrid(self.x,self.z_corr)
+        # self.z_corr = (self.temperature.z + self.thick_air)
+        self.XX, self.ZZ = np.meshgrid(self.x,self.z)
+        self.ZZ = self.ZZ - np.vstack([self.surface_interface.values for j in range(self.Nz)])
+        
 
-
-    def apply_basic_temperature(self, lithosphere_interface:str|int, surface_interface:str|int=None,
-                                t_pot:float=1350.0):
+    def apply_linear_temperature(self, t_pot:float=1350.0):
         '''
         This function initiate the temperature field combining a linear gradient within the 
-        lithosphere and an adiabatic gradient in the mantle.
-
-        Future implementations: make it for each column based on the interface names instead 
-        assuming a constant lithosphere.
+        lithosphere and an adiabatic gradient in the mantle. Assuming 0°C in the top.
 
         Parameters
         ----------
-        lithosphere_thickness: float
-            The vertical thickness of the lithosphere used to calculate the initial 
-            linear thermal gradient.
 
         t_pot: float, optional
-            The potential temperature of the asthenosphere/mantle boundary.
+            The potential temperature in the LAB, in °C.
             
             Default is 1350.0.
         '''
         self.t_pot = t_pot
 
-        self.lithosphere_interface = get_interface(self.interfaces,lithosphere_interface)
-        self.surface_interface = get_interface(self.interfaces,surface_interface)
-
-        self.lithosphere_thickness = self.surface_interface - self.lithosphere_interface
         for j in range(self.Nx):
-            self.temperature[:,j] = float((t_pot)/self.lithosphere_thickness[j]) * -self.ZZ[j]
+            self.temperature[:,j] = float((t_pot)/self.lithosphere_thickness[j]) * -self.ZZ[:,j]
 
         temp_adiabatic = t_pot / np.exp(self.g * self.alpha * -self.ZZ / self.c_cap)
         
@@ -1548,94 +1556,70 @@ class TemperatureFieldBuilder:
 
 
 
-    # The numerical solve should be rewritten to use thermal conductivity rather than diffusivity
-    def solve_heat_diffusion1D(self, time_max: float, dt_years: float=0.0, x_inx:int=0):
-        '''
-        This function solves the 1D transient heat diffusion equation on a single vertical 
-        column and replicates the resulting thermal profile across the entire 2D domain.
+    def solve_heat_column(self, x_inx:int=0, mode:str='propagate'):
+        """
+        This function solves the 1D steady state heat diffusion equation on a single vertical 
+        column. The formulation is:
 
-        Future implementations: Apply this calculated profile in a determined range instead in 
-        the whole scenario. However, it is possible to create more than one temperature builder
-        and to filter the thermal field, applying both builders in differente regions.  
+        dT/dt = d/dz (k dT/dz) + H 
 
         Parameters
         ----------
-        time_max: float
-            The total simulation time in years for the 1D heat diffusion process.
-
-        dt_years: float, optional
-            The time step size in years. If it is 0.0 or exceeds the numerical stability limit, 
-            the function will automatically compute and apply a stable time step.
-            
-            Default is 0.0.
-
-        x_inx: int, optional
+        x_inx : int, optional
             The index along the x-axis from which the 1D vertical column is extracted 
             for the calculation.
-            
+
             Default is 0.
-        '''
-        
-        dt = dt_years * SEC_PER_YEAR
-        num_steps = int(time_max / dt_years)
-        print(f"Running {num_steps} iterations for 1D profile...")
-        
+
+        mode : str, optional
+            Determines how the result is handled after calculation. 
+            If 'propagate' (default), the solved 1D temperature profile is tiled 
+            horizontally across the entire x-domain, modifying the class's temperature 
+            attribute in-place.
+            If set to any other string, the function simply returns the 1D array.
+
+        Returns
+        -------
+        ndarray or None
+            If `mode` is not 'propagate', returns a 1D numpy array of the solved 
+            temperature profile for the specified column. 
+            If `mode` is 'propagate', returns None (modifies `self.temperature` in-place).
+        """
+
+        T_1d = self.temperature.isel(x=x_inx).values.copy()
+        lithosphere_thickness = self.lithosphere_thickness.isel(x=x_inx).values.copy() #m
+        dz = abs(self.dz) #m
+        t_pot = self.t_pot #°C
+
         # 1. Extract 1D profiles (using the first column at x=0)
         # We use .isel() to safely slice the xarray without assuming axis order
-        T_1d = self.temperature.isel(x=x_inx).values.copy()
-        kappa_1d = self.kappa.isel(x=x_inx).values.copy()
-        H_1d = self.H.isel(x=x_inx).values.copy()
-        lithosphere_thickness = self.lithosphere_thickness.isel(x=x_inx).values.copy()
+        depth = -1 * self.ZZ[:,x_inx] # m  (depth, not z axis)
+        cond = (depth <= (lithosphere_thickness)) & (depth > 0)
+        depth_litho = depth[cond]
+        k_nodes = self.k_cond.isel(x=x_inx).values.copy()[cond]
+        H_1d = self.H_vol.isel(x=x_inx).values.copy()[cond] # W/m3
 
-        cond = (self.z_corr.values >= (-lithosphere_thickness)) & (self.z_corr.values < 0)
-        # print(f'z>{(-self.lithosphere_thickness)}')
-        # print(f'z<{0}')
-        # print(self.z_corr[cond])
-        
-        dz = abs(self.dz)
-        
-        # 2. CFL Condition (1D limit is less restrictive than 2D)
-        kappa_max = np.max(kappa_1d)
-        dt_max = (dz**2) / (2 * kappa_max)
-        
-        if dt > dt_max:
-            print(f"Warning: Input dt exceeds 1D stable limit ({dt_max/SEC_PER_YEAR:.2e} yrs).")
-            dt = dt_max * 0.99
-            num_steps = int((time_max * SEC_PER_YEAR) / dt)
+        T_1d[cond] = spsolve_heat_col(depth_litho,k_nodes,H_1d,0,t_pot,dz)
 
-        self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
-        self.scenario._print_verbose(f"{num_steps} steps to run.")
-        
-        # 3. 1D Finite Difference Loop
-        for step in range(num_steps):
-            T_new = np.copy(T_1d)
-            
-            # Derivatives along the Z-axis
-            dT_dz = (T_1d[2:] - T_1d[:-2]) / (2 * dz)
-            dK_dz = (kappa_1d[2:] - kappa_1d[:-2]) / (2 * dz)
-            d2T_dz2 = (T_1d[2:] - 2 * T_1d[1:-1] + T_1d[:-2]) / (dz**2)
-            
-            # Diffusion term
-            diffusion_z = kappa_1d[1:-1] * d2T_dz2 + dK_dz * dT_dz
-            
-            # Forward Euler update
-            T_new[1:-1] = T_1d[1:-1] + dt * (diffusion_z + H_1d[1:-1] / self.c_cap)
-            
-            # Boundary Conditions (Dirichlet: Fixed temperatures at top and bottom)
-            T_new[0] = T_1d[0]
-            T_new[-1] = T_1d[-1]
-            
-            T_1d = np.where(cond, T_new, T_1d)
-            
-        # 4. Replicate and map back to 2D
-        nx = len(self.x)
-        
-        # Verify the dimensions of the host DataArray to broadcast correctly
-        if self.temperature.dims == ('z', 'x'):
-            # Tile T_1d into columns: shape becomes (nz, nx)
-            T_2d = np.tile(T_1d[:, np.newaxis], (1, nx))
+        if mode=='propagate':
+            self.temperature.values = np.tile(T_1d, (self.Nx, 1)).T 
+
         else:
-            # Tile T_1d into rows: shape becomes (nx, nz)
-            T_2d = np.tile(T_1d, (nx, 1))
+            return T_1d 
+
+    def solve_heat_1D(self):
+        '''
+        This function solve the 1D heat equation for the whole domain.
+        See TemperatureFieldBuilder.solve_heat_column for more details.
+
+        The formulation is:
+        dT/dt = d/dz (k dT/dz) + H 
+        
+        If your input is a perfect flat "layer cake" your should use:
+        `TemperatureFieldBuilder.solve_heat_column(inx_x=N, mode='propagate')`
+        it's an efficient way to solve the thermal field.
+        '''
+
+        for j in range(self.Nx):
+            self.temperature.values[:,j] =  self.solve_heat_column(x_inx=j, mode='nothing')
             
-        self.temperature.values = T_2d
