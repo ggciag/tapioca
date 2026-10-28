@@ -1345,82 +1345,200 @@ class VelocityFieldBuilder:
 class TemperatureFieldBuilder:
     
     '''
-    Constructs the 2D thermal field for Mandyoc scenarios, using the created spatial grid 
-    and material data structures.
+    Builds and solves the 2D thermal field for Mandyoc scenarios.
+
+    Uses the grid geometry and the material fields pre-populated in a
+    `MandyocBuilder` to construct a temperature field. Provides three
+    families of solvers:
+
+    * **Steady-state 1D** (`solve_heat_column`, `solve_heat_1D`)
+      — a finite-volume solve per column, appropriate for flat or nearly
+      flat "layer-cake" geometries. Exact for the discretized operator,
+      runs in O(Nz) per column.
+    * **Steady-state 2D** (`solve_heat_2D`) — a single sparse linear
+      solve over the whole lithospheric domain. Required when lateral
+      conduction is non-negligible (sharp LAB topography, dipping layers).
+
+    The initial thermal state (linear geotherm + mantle adiabat) is set up
+    with `apply_linear_temperature`; this is required before any
+    solver can run, because all solvers reference `t_pot`, which is only
+    set there.
 
     Parameters
     ----------
-    scenarioBuilder: MandyocBuilder
-        The primary scenario instance containing grid geometry and pre-populated material 
-        property fields.
+    scenarioBuilder : MandyocBuilder
+        Parent scenario containing the grid geometry and the material
+        fields (`rho`, `k`, `H`). Its `DTree` must already contain
+        the interfaces and fields (i.e., `create_materials_fields()`
+        must have been called).
 
-    LAB_interface: str or int
-        The name or ID that indicate the Lithosphere-Asthenosphere Boundary (LAB)
-        
-        Default is 0.
-    
-    surface_interface: str or int
-        The name or ID that indicate the Crust-Air interface. If None, gets the interface below the air.
-        
-        Default is None.
+    LAB_interface : str or int, optional
+        Identifier (interface name or `id` attribute) of the
+        Lithosphere-Asthenosphere Boundary. The temperature at this
+        interface is prescribed as `t_pot` (set via
+        `apply_linear_temperature`).
 
-    c_cap: float, optional
-        Specific heat capacity (in J/(kg K)). Defaults to 1250.0.
+        Default is `0`, which under the standard Mandyoc numbering
+        convention selects the lowermost (basal) interface. Override this
+        explicitly for realistic scenarios.
 
-    g: float, optional
-        Gravitational acceleration (in m2/s). 
+    surface_interface : str or int, optional
+        Identifier (interface name or `id` attribute) of the Crust-Air
+        interface (the base of the sticky-air layer). The temperature here
+        is prescribed as 0 °C.
+
+        If `None`, the penultimate interface in `self.interfaces` is
+        used — under the standard numbering convention, that is the
+        shallowest rock interface. This heuristic assumes
+        `self.interfaces` is sorted by `id` (which is what
+        `create_materials_fields()` enforces).
+
+        Default is `None`.
+
+    c_cap : float, optional
+        Specific heat capacity at constant pressure, in J/(kg·K). Used
+        both to build the conductivity field
+        (`k_cond = kappa · rho · c_cap`) and as a source-term divisor in
+        the diffusion equation.
+
+        Default is 1250.0.
+
+    g : float, optional
+        Gravitational acceleration in m/s². The default is negative because
+        the model's z-axis points upward while gravity points downward.
+        Used only for the mantle adiabat.
+
         Default is -10.0.
 
-    alpha: float, optional
-        Volumetric thermal expansion coefficient (in K^-1). 
+    alpha : float, optional
+        Volumetric thermal expansion coefficient, in K⁻¹. Used only for
+        the mantle adiabat.
+
         Default is 3.28e-5.
 
     Attributes
     ----------
+    scenario : MandyocBuilder
+        Reference to the parent scenario builder.
 
-    scenario: MandyocBuilder
-        Reference pointer to the parent scenario builder.
+    Nx, Nz : int
+        Number of nodes along the x (horizontal) and z (vertical) axes.
 
-    Nx, Nz: int
-        Number of computational nodes in the x (horizontal) and z (vertical) directions.
+    Lx, Lz : float
+        Total domain size along x and z, in meters. `Lz` is negative (the
+        model bottom is at `z = Lz`), following Mandyoc's convention that
+        z is positive upward.
 
-    Lx, Lz: float
-        Total physical dimensions of the domain along the x and z axes.
+    x, z : numpy.ndarray
+        1D coordinate arrays. `x` spans `[0, Lx]`; `z` spans
+        `[Lz, 0]` (ascending, so `z[-1] = 0` is the top of the
+        domain).
 
-    x, z: array-like
-        1D spatial coordinate arrays.
+    dx, dz : float
+        Grid spacings. `dx > 0`; `dz` follows the sign convention of
+        `z` (i.e., `dz = z[0] - z[1] < 0` by default). Use
+        `abs(self.dz)` in any formula that expects a positive spacing.
 
-    thick_air: float
-        Vertical thickness of the upper sticky air boundary layer.
+    thick_air : float
+        Thickness of the sticky-air layer as defined at the
+        `MandyocBuilder` level, in meters. Kept for reference and
+        backward compatibility; the thermal solvers use
+        `surface_interface` (not this value) to locate the air-rock
+        boundary.
 
-    g, alpha, c_cap: float 
-        Stored physical constants governing thermomechanical behavior.
+    g, alpha, c_cap : float
+        Physical constants as provided in the constructor (see
+        Parameters).
 
-    rho: xarray.DataArray 
-        2D spatial density field mapped from the scenario tree.
+    interfaces : xarray.Dataset
+        Local copy of the scenario's interface dataset. Each interface is
+        a DataArray whose `attrs` carry the material parameters
+        (`rho`, `k`, `H`, etc.).
 
-    kappa: xarray.DataArray
-        2D spatial thermal diffusivity field mapped from the scenario tree.
+    rho : xarray.DataArray
+        2D density field, in kg/m³, shape `(Nz, Nx)`. Extracted from
+        `scenario.DTree.fields.rho`.
 
-    H: xarray.DataArray 
-        2D spatial radiogenic heat production field mapped from the scenario tree.
+    kappa : xarray.DataArray
+        2D thermal diffusivity field, in m²/s, shape `(Nz, Nx)`.
+        Extracted from `scenario.DTree.fields.k`.
 
-    k_cond: xarray.DataArray 
-        2D thermal conductivity field, automatically computed upon initialization 
-        as the product of kappa, rho, and c_cap.
+    H : xarray.DataArray
+        2D radiogenic heat production **per unit mass**, in W/kg, shape
+        `(Nz, Nx)`. Extracted from `scenario.DTree.fields.H`.
 
-    temperature: xarray.DataArray 
-        2D thermal field array of shape (Nx, Nz) initialized to 0.0. Coordinates are 
-        mapped to x and z, with internal attributes explicitly defining units as 'deg C'.
+    H_vol : xarray.DataArray
+        2D volumetric radiogenic heat production, in W/m³, computed as
+        `H · rho`. This is the source term used by all solvers.
 
-    z_corr: xarray.DataArray
-        Vertical coordinates vertically offset by the sticky air thickness (z + thick_air) 
-        to evaluate true structural depth from the geological surface.
+    k_cond : xarray.DataArray
+        2D thermal **conductivity**, in W/(m·K), computed as
+        `kappa · rho · c_cap`. This is not the diffusivity —
+        it is the quantity whose harmonic mean at material interfaces
+        enforces flux continuity in the steady-state solvers.
 
-    XX, ZZ (numpy.ndarray)
-        2D spatial coordinate meshgrids generated from x and z. Used for fast 
-        vectorized matrix masking, boolean logic, and depth-dependent numerical conditions.
-        ZZ is corrected to the air surface along x axis.
+    LAB_interface : xarray.DataArray
+        1D DataArray holding the depth of the
+        Lithosphere-Asthenosphere Boundary, extracted by identifier.
+
+    surface_interface : xarray.DataArray
+        1D DataArray holding the depth of the base of
+        the sticky-air layer (the crust-air interface).
+
+    lithosphere_thickness : xarray.DataArray
+        1D array giving the lithospheric thickness at each x column,
+        computed as `surface_interface - LAB_interface`. Always
+        positive.
+
+    temperature : xarray.DataArray
+        2D temperature field, in °C, shape `(Nz, Nx)`. Initialized to
+        0.0 and populated by `apply_linear_temperature` followed by
+        one of the solver methods.
+
+    XX, ZZ : numpy.ndarray
+        2D meshgrids, shape `(Nz, Nx)`. `XX` is the horizontal
+        coordinate (broadcast of `x`). `ZZ` is the **surface-relative**
+        vertical coordinate,
+
+        .. code-block:: text
+
+            ZZ = z - surface_interface(x)
+
+        so that
+
+        * `ZZ > 0` — node is in the air layer;
+        * `ZZ == 0` — node is exactly at the surface;
+        * `ZZ < 0` — node is below the surface at depth `-ZZ`.
+
+    Notes
+    -----
+    **Coordinate convention.** The grid is Cartesian with `x`
+    increasing to the right and `z` increasing upward. Physical depth is
+    `-z`; surface-relative depth is `-ZZ`.
+
+    **Derived material fields.** Two fields are computed from
+    `rho`, `kappa`, and `H` at construction time and used by every
+    solver:
+
+    * `H_vol = H · rho` [W/m³] — volumetric radiogenic heat production;
+    * `k_cond = kappa · rho · c_cap` [W/(m·K)] — thermal conductivity.
+
+    The steady-state solvers work with `k_cond` and enforce interface
+    flux continuity via the harmonic mean of adjacent nodes, which is
+    exact for piecewise-constant layers.
+
+    **Potential temperature.** `t_pot` is set by
+    `apply_linear_temperature` and is referenced by all solvers.
+    Calling a solver without first calling `apply_linear_temperature`
+    raises an `AttributeError` — this is intentional, to force the
+    initial condition to be made explicit.
+
+    **Recommended workflow.** For flat or nearly flat geometries use the
+    1D column solvers; for geometries with sharp lateral contrasts use the
+    2D steady-state solver, ideally preceded by a 1D initial guess. For
+    time-dependent problems use the transient solver starting from the
+    steady-state solution.
+ 
     '''
 
     def __init__(self, scenarioBuilder:MandyocBuilder, 
@@ -1474,14 +1592,19 @@ class TemperatureFieldBuilder:
 
     def apply_linear_temperature(self, t_pot:float=1350.0):
         '''
-        This function initiate the temperature field combining a linear gradient within the 
-        lithosphere and an adiabatic gradient in the mantle. Assuming 0°C in the top.
+        Initialise ``temperature`` from a linear geotherm and a mantle adiabat.
+
+        This method must be called before any solver
+        (`solve_heat_column`, `solve_heat_1D`,
+        `solve_heat_2D`, `solve_heat_diffusion2D`), because the
+        solvers read ``self.t_pot`` — which is only set here — to build
+        their boundary conditions.
 
         Parameters
         ----------
 
         t_pot: float, optional
-            The potential temperature in the LAB, in °C.
+            The potential temperature of the mantle, in °C.
             
             Default is 1350.0.
         '''
@@ -1500,90 +1623,51 @@ class TemperatureFieldBuilder:
 
         return self
 
-    # this function needs improvement, it's too slow. maybe I should solve the heat equation by an implicit method
-    def solve_heat_diffusion2D(self, time_max: float, dt_years: float=0.0):
-        '''
-        This function solves the 2D transient heat diffusion equation over a specified maximum 
-        time, using a Numba-optimized finite difference loop.
-
-        This function is very slow for medium-fine grids, it still need improvements.
-
-        Parameters
-        ----------
-        time_max: float
-            The total simulation time in years for the heat diffusion process.
-
-        dt_years: float, optional
-            The time step size in years. If it is 0.0 or exceeds the numerical stability 
-            (CFL) limit, the function will automatically cap it to a stable maximum.
-            
-            Default is 0.0.
-        '''
-        import numpy as np
-        
-        # Convert dt from years to seconds to match SI units
-        
-        dt = dt_years * SEC_PER_YEAR
-        num_steps = int(time_max / dt_years)
-
-        # Extract raw numpy arrays from xarray DataArrays for computation speed
-        T = self.temperature.transpose('x', 'z').values
-        kappa = self.kappa.transpose('x', 'z').values
-        H = self.H.transpose('x', 'z').values
-        
-        # Grid spacing
-        dx = abs(self.dx)
-        dz = abs(self.dz)
-        
-        # Ensure numerical stability (CFL condition)
-        kappa_max = np.max(kappa)
-        dt_max = (dx**2 * dz**2) / (2 * kappa_max * (dx**2 + dz**2))            
-
-        cond = (-self.ZZ.T >= (-self.lithosphere_thickness)) & (-self.ZZ.T <= 0)
-
-        if (dt > dt_max) or (dt_years<=0):
-            
-            # Automatically cap the timestep to the maximum stable limit to prevent explosion
-            dt = dt_max * 0.95
-            num_steps = int((time_max * SEC_PER_YEAR) / dt)
-
-        self.scenario._print_verbose(f"using dt = {dt/SEC_PER_YEAR:.2e} yrs (dt_max is {dt_max/SEC_PER_YEAR:.2e}).")
-        self.scenario._print_verbose(f"{num_steps} steps to run.")
-
-        T = _numba_diffusion_loop(
-            T, kappa, H, self.c_cap, dx, dz, dt, num_steps, cond
-        )
-
-        # Push updated values back to the DataArray
-        if self.temperature.dims == ('z', 'x'):
-            self.temperature.values = T.T
-        else:
-            self.temperature.values = T
-
-
-
     def solve_heat_column(self, x_inx:int=0, mode:str='propagate'):
         """
-        This function solves the 1D steady state heat diffusion equation on a single vertical 
-        column. The formulation is:
+        Solve the steady-state 1D heat equation on a single vertical column.
 
-        dT/dt = d/dz (k dT/dz) + H 
+        Uses a finite-volume discretisation (harmonic-mean face conductivity,
+        exact for piecewise-constant layers) to solve. 
+        The formulation is:
 
-        The 2D temperature profile must be initialized to be used as boundary condition.
+        dT/dt = d/dz (k dT/dz) + H = 0
+        
+        (with the conditions applied:)
+        
+        d/dξ ( k_cond · dT/dξ ) + H_vol = 0 ,    0 ≤ ξ ≤ L(x)
+
+         where
+
+        * ``ξ = -ZZ[:, x_inx]`` is the depth below the surface (positive
+        downward), computed from the surface-relative vertical coordinate;
+        * ``L(x) = lithosphere_thickness(x_inx)`` is the column's lithospheric
+        thickness;
+        * ``k_cond`` and ``H_vol`` are the conductivity and volumetric heat
+        production fields derived in `__init__`.
+
+        Boundaries condition are: T(0) = 0°C; T(LAB) = T_pot.
+
         Parameters
         ----------
         x_inx : int, optional
-            The index along the x-axis from which the 1D vertical column is extracted 
-            for the calculation.
+            Index along the x-axis of the column to solve.
 
             Default is 0.
 
         mode : str, optional
-            Determines how the result is handled after calculation. 
-            If 'propagate' (default), the solved 1D temperature profile is tiled 
-            horizontally across the entire x-domain, modifying the class's temperature 
-            attribute in-place.
-            If set to any other string, the function simply returns the 1D array.
+            Determines how the result is applied:
+
+            * ``'propagate'`` — replicate the solved 1D profile across all x
+            columns (via ``np.tile``) and write it back to
+            ``self.temperature``. For a truly layer-cake scenario,
+            solving one column and propagating is the cheapest correct
+            approach.
+            * Any other value — return the 1D temperature array of the
+            selected column without modifying ``self.temperature``. Used
+            internally by `solve_heat_1D` to loop over columns.
+
+            Default is ``'propagate'``.
 
         Returns
         -------
@@ -1633,25 +1717,25 @@ class TemperatureFieldBuilder:
 
         return self
 
-    def solve_heat_2D(self, start_by_1d:bool=False):
+    def solve_heat_2D(self):
         """
-        This function solve the 2D heat equation for the whole domain using sparce matrices
-        and by scipy.sparse.linalg.spsolve.
+        Solve the steady-state 2D heat equation over the lithospheric domain.
+
+        Uses a finite-volume discretisation on the structured ``(Nz, Nx)``
+        grid, assembled as a five-diagonal sparse linear system and solved
+        with ``scipy.sparse.linalg.spsolve`` (sparse direct LU). The
+        continuous equation is:
 
         The formulation is:
         dT/dt = d/dx (k dT/dx) + d/dz (k dT/dz) + H = 0
         
-        The 2D temperature profile must be initialized to be used as boundary condition.
-        Parameters
-        ----------
-        start_by_1d : bool
-            If True, uses the 1D columns solution to initiate the convergence.
+        Face conductivities are the harmonic mean of adjacent nodal
+        values, which enforces flux continuity across material interfaces
+        exactly for piecewise-constant layers.
+
+        The boundary conditions are applied in the whole air and asthenosphere.
         """
         
-        if start_by_1d==True:
-            self.solve_heat_1D()
-
-
         print("Solving the 2D heat equation")
         d_down, d_left, d_main, d_right, d_up, b = build_diagonals_2D(self.Nz, self.Nx,
                                         self.dz,self.dx,
