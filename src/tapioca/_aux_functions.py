@@ -6,13 +6,14 @@ import pandas as pd
 
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+from numba import jit
 
 from pathlib import Path
 
 from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARAMS_TYPES
 
 __all__ = ["read_params","evaluate_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
-           "_numba_diffusion_loop",
+           "_numba_diffusion_loop","build_diagonals_2D",
            "_Druker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
 
 # Old functions, mostly made to handle the old format of data management
@@ -204,8 +205,7 @@ def export_compressed_datatree(dt, filename, complevel=5):
     dt.to_netcdf(filename, engine="h5netcdf")
 
 
-from numba import njit
-@njit(fastmath=True)
+@jit(nopython=True,fastmath=True)
 def _numba_diffusion_loop(T, kappa, H, c_cap, dx, dz, dt, num_steps, cond):
     """JIT-compiled loop for performance gains
     It is a function to iterate the Euler Foward Approach in the heat diffusion equation.
@@ -299,6 +299,80 @@ def spsolve_heat_col(T, k_nodes, H, Tsurf, Tlab, dz):
     A = sp.diags([lower_diag, main_diag, upper_diag], [-1, 0, 1], format='csc')
     T = spla.spsolve(A, d) # A*T=d
     return T
+
+@jit(nopython=True,cache=True)
+def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_bot, T_top,ZZ,Tmesh,lab_surf):
+    """
+    Fast matrix assembly using Numba. 
+    This functions is made to solve 2D steady state heat equation.
+    i=0 is bottom, i=Nz-1 is top. j=0 is left, j=Nx-1 is right.
+    """
+    N = Nz * Nx
+    
+    # Pre-allocate the 5 diagonals
+    diag_main = np.zeros(N)
+    diag_left = np.zeros(N - 1)
+    diag_right = np.zeros(N - 1)
+    diag_down = np.zeros(N - Nx)
+    diag_up = np.zeros(N - Nx)
+    
+    # Pre-allocate Right-Hand Side (b)
+    b = np.zeros(N)
+    
+    for i in range(Nz):
+        for j in range(Nx):
+            idx = i * Nx + j
+
+            # --- 1. Apply Top and Bottom Boundary Conditions ---
+            # check air
+            if ZZ[i,j] >= 0:
+                diag_main[idx] = 1.0
+                b[idx] = T_top
+                continue
+
+            # check asthenosphere
+            if ZZ[i,j] <= -lab_surf[j]:
+                diag_main[idx] = 1.0
+                b[idx] = Tmesh[i,j]
+                continue
+                
+            # --- 2. Interior and Side Boundaries ---
+            
+            # Vertical harmonic means (Always exist for interior nodes)
+            k_dn = 2.0 * k_2D[i, j] * k_2D[i-1, j] / (k_2D[i, j] + k_2D[i-1, j] + 1e-15)
+            k_up = 2.0 * k_2D[i, j] * k_2D[i+1, j] / (k_2D[i, j] + k_2D[i+1, j] + 1e-15)
+            
+            c_dn = k_dn / (dz**2)
+            c_up = k_up / (dz**2)
+            c_lt = 0.0
+            c_rt = 0.0
+            
+            # Horizontal harmonic means (Respecting Neumann side boundaries)
+            if j > 0: # Has left neighbor
+                k_lt = 2.0 * k_2D[i, j] * k_2D[i, j-1] / (k_2D[i, j] + k_2D[i, j-1] + 1e-15)
+                c_lt = k_lt / (dx**2)
+                
+            if j < Nx - 1: # Has right neighbor
+                k_rt = 2.0 * k_2D[i, j] * k_2D[i, j+1] / (k_2D[i, j] + k_2D[i, j+1] + 1e-15)
+                c_rt = k_rt / (dx**2)
+            
+            # --- Normalize the equation by the main diagonal ---
+            norm = c_dn + c_up + c_lt + c_rt
+            
+            if j > 0:
+                diag_left[idx - 1] = c_lt / norm
+            if j < Nx - 1:
+                diag_right[idx] = c_rt / norm
+                
+            # Place vertical coefficients scaled
+            diag_down[idx - Nx] = c_dn / norm
+            diag_up[idx] = c_up / norm
+            
+            # Place main diagonal and RHS scaled
+            diag_main[idx] = -1.0
+            b[idx] = -H_2D[i, j] / norm
+            
+    return diag_down, diag_left, diag_main, diag_right, diag_up, b
 
 def _Druker_Prager_YS(c:float, Phi:float, P:float):
     '''

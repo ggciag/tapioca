@@ -10,8 +10,11 @@ import numpy as np
 import xarray as xr
 from xarray import DataTree
 
+import scipy.sparse as sp
+from  scipy.sparse.linalg import bicgstab, spsolve
+
 from .._variables import VARS_TYPES, PARAMS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, spsolve_heat_col, get_interface, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
+from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, build_diagonals_2D, spsolve_heat_col, get_interface, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
 
 __all__ = ['MandyocBuilder','TemperatureFieldBuilder','VelocityFieldBuilder']
 
@@ -1338,6 +1341,7 @@ class VelocityFieldBuilder:
         return fig1,fig2
 
 
+## The documentation of this class is outdated
 class TemperatureFieldBuilder:
     
     '''
@@ -1350,8 +1354,10 @@ class TemperatureFieldBuilder:
         The primary scenario instance containing grid geometry and pre-populated material 
         property fields.
 
-    lithosphere_interface: str or int
+    LAB_interface: str or int
         The name or ID that indicate the Lithosphere-Asthenosphere Boundary (LAB)
+        
+        Default is 0.
     
     surface_interface: str or int
         The name or ID that indicate the Crust-Air interface. If None, gets the interface below the air.
@@ -1418,7 +1424,7 @@ class TemperatureFieldBuilder:
     '''
 
     def __init__(self, scenarioBuilder:MandyocBuilder, 
-                 lithosphere_interface:str|int, surface_interface:str|int=None,
+                 LAB_interface:str|int=0, surface_interface:str|int=None,
                  c_cap:float=1250.0,g:float=-10.0,alpha:float=3.28e-5):
 
 
@@ -1450,10 +1456,10 @@ class TemperatureFieldBuilder:
         if surface_interface == None:
             surface_interface = len(self.interfaces) - 2 #getting the penultimate interface as surface
 
-        self.lithosphere_interface = get_interface(self.interfaces,lithosphere_interface)
+        self.LAB_interface = get_interface(self.interfaces,LAB_interface)
         self.surface_interface = get_interface(self.interfaces,surface_interface)
 
-        self.lithosphere_thickness = self.surface_interface - self.lithosphere_interface
+        self.lithosphere_thickness = self.surface_interface - self.LAB_interface
         
         self.temperature = xr.DataArray(np.zeros((self.Nz,self.Nx),np.float64),
                                      dims=('z','x'),
@@ -1563,6 +1569,7 @@ class TemperatureFieldBuilder:
 
         dT/dt = d/dz (k dT/dz) + H 
 
+        The 2D temperature profile must be initialized to be used as boundary condition.
         Parameters
         ----------
         x_inx : int, optional
@@ -1594,7 +1601,7 @@ class TemperatureFieldBuilder:
         # 1. Extract 1D profiles (using the first column at x=0)
         # We use .isel() to safely slice the xarray without assuming axis order
         depth = -1 * self.ZZ[:,x_inx] # m  (depth, not z axis)
-        cond = (depth <= (lithosphere_thickness)) & (depth > 0)
+        cond = (depth <= (lithosphere_thickness)) & (depth >= 0)
         depth_litho = depth[cond]
         k_nodes = self.k_cond.isel(x=x_inx).values.copy()[cond]
         H_1d = self.H_vol.isel(x=x_inx).values.copy()[cond] # W/m3
@@ -1613,8 +1620,9 @@ class TemperatureFieldBuilder:
         See TemperatureFieldBuilder.solve_heat_column for more details.
 
         The formulation is:
-        dT/dt = d/dz (k dT/dz) + H 
+        dT/dt = d/dz (k dT/dz) + H = 0
         
+        The 2D temperature profile must be initialized to be used as boundary condition.
         If your input is a perfect flat "layer cake" your should use:
         `TemperatureFieldBuilder.solve_heat_column(inx_x=N, mode='propagate')`
         it's an efficient way to solve the thermal field.
@@ -1622,4 +1630,45 @@ class TemperatureFieldBuilder:
 
         for j in range(self.Nx):
             self.temperature.values[:,j] =  self.solve_heat_column(x_inx=j, mode='nothing')
-            
+
+        return self
+
+    def solve_heat_2D(self, start_by_1d:bool=False):
+        """
+        This function solve the 2D heat equation for the whole domain using sparce matrices
+        and by scipy.sparse.linalg.spsolve.
+
+        The formulation is:
+        dT/dt = d/dx (k dT/dx) + d/dz (k dT/dz) + H = 0
+        
+        The 2D temperature profile must be initialized to be used as boundary condition.
+        Parameters
+        ----------
+        start_by_1d : bool
+            If True, uses the 1D columns solution to initiate the convergence.
+        """
+        
+        if start_by_1d==True:
+            self.solve_heat_1D()
+
+
+        print("Solving the 2D heat equation")
+        d_down, d_left, d_main, d_right, d_up, b = build_diagonals_2D(self.Nz, self.Nx,
+                                        self.dz,self.dx,
+                                        self.k_cond.values,self.H_vol.values.copy(),
+                                        self.t_pot,0,
+                                        self.ZZ,self.temperature.values.copy(),
+                                        self.lithosphere_thickness.values.copy())
+        
+        diagonals = [d_down, d_left, d_main, d_right, d_up]
+        offsets = [-self.Nx, -1, 0, 1, self.Nx]
+        
+        print("Diagonals prepared")
+
+        # Assemble the sparse matrix in Compressed Sparse Column format
+        A = sp.diags(diagonals, offsets, format='csc')
+        T_flat = spsolve(A, b)
+        
+        self.temperature.values = T_flat.reshape((self.Nz, self.Nx))
+
+        return self
