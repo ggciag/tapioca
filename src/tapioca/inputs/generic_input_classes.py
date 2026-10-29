@@ -567,6 +567,7 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
 
         self.alpha = tempbuilder.alpha
         self.c_cap = tempbuilder.c_cap
+        self.g_abs = abs(tempbuilder.g)
 
         return self
 
@@ -890,6 +891,10 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
             Dictionary with the parameters
         """
 
+        params_to_check = {'alpha':'thermal_expansion_coefficient',
+                         'c_cap':'heat_capacity',
+                         'g_abs':'gravity_acceleration'
+                         }
 
         temp_param = {'nx':self.Nx,
                       'nz':self.Nz,
@@ -902,6 +907,11 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
         if self.dimensions == 3:
             temp_param['ny'] = self.Ny
             temp_param['ly'] = self.Ly
+
+        # check if these parameters were already set in the builder
+        for k in list(params_to_check.keys()):
+            if hasattr(self,k):
+                temp_param[params_to_check[k]] = getattr(self,k)
         
 
         fixed_parameters = list(temp_param.keys())
@@ -1353,7 +1363,7 @@ class VelocityFieldBuilder:
 
         return fig1,fig2
 
-
+## future implementations: modes that consider neumann boundary conditions (heat flux bc)
 class TemperatureFieldBuilder:
     
     '''
@@ -1729,8 +1739,8 @@ class TemperatureFieldBuilder:
 
         return self
 
-    ## Future development: fix the bot boundary condition in T(z=0) instead T(z=litho)
-    def solve_heat_2D(self):
+    ## Future development: add other options of boundary conditions and solvers
+    def solve_heat_2D(self, bot_bc:str = 'adiabatic'):
         """
         Solve the steady-state 2D heat equation over the lithospheric domain.
 
@@ -1747,15 +1757,24 @@ class TemperatureFieldBuilder:
         exactly for piecewise-constant layers.
 
         The boundary conditions are applied in the whole air and asthenosphere.
+
+        Parameters
+        ----------
+
+        bot_bc : str
+            Defines the bot boundary condition for the solver. `'adiabatic'` keeps the
+            pre set adiabatic profile in the asthenosphere. `'fixed'` fix the temperature
+            in i=0.
         """
         
         print("Solving the 2D heat equation")
         d_down, d_left, d_main, d_right, d_up, b = build_diagonals_2D(self.Nz, self.Nx,
                                         self.dz,self.dx,
                                         self.k_cond.values,self.H_vol.values.copy(),
-                                        self.t_pot,0,
+                                        0,
                                         self.ZZ,self.temperature.values.copy(),
-                                        self.lithosphere_thickness.values.copy())
+                                        self.lithosphere_thickness.values.copy(),
+                                        bot_bc)
         
         diagonals = [d_down, d_left, d_main, d_right, d_up]
         offsets = [-self.Nx, -1, 0, 1, self.Nx]

@@ -298,7 +298,7 @@ def spsolve_heat_col(T, k_nodes, H, Tsurf, Tlab, dz):
     return T
 
 @jit(nopython=True,cache=True)
-def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_bot, T_top,ZZ,Tmesh,lab_surf):
+def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_top,ZZ,Tmesh,lab_surf,bot_bc='adiabatic'):
     """
     Fast matrix assembly using Numba. 
     This functions is made to solve 2D steady state heat equation.
@@ -327,12 +327,24 @@ def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_bot, T_top,ZZ,Tmesh,lab_sur
                 b[idx] = T_top
                 continue
 
-            # check asthenosphere
-            if ZZ[i,j] <= -lab_surf[j]:
+            if bot_bc.lower() == 'adiabatic': # keeps pre set temperature
+                # check asthenosphere
+                if ZZ[i,j] <= -lab_surf[j]:
+                    diag_main[idx] = 1.0
+                    b[idx] = Tmesh[i,j]
+                    continue
+            
+            else:
+                if i == 0: # fix only the bottom of the model
+                    diag_main[idx] = 1.0
+                    b[idx] = Tmesh[i,j]
+                    continue
+
+            # air (i = Nz-1), in case there is no sticky air layer
+            if i == Nz - 1:
                 diag_main[idx] = 1.0
-                b[idx] = Tmesh[i,j]
+                b[idx] = T_top                 # fallback: treat top row as surface
                 continue
-                
             # --- 2. Interior and Side Boundaries ---
             
             # Vertical harmonic means (Always exist for interior nodes)

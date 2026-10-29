@@ -1,4 +1,5 @@
 import numpy as np
+## Next steps here: to lock dictionary with MappingProxyType class
 
 __all__ = ["VARIABLES_LIST","VARS_TYPES","PARAMS_TYPES",
            "SEC_PER_YEAR","CM",
