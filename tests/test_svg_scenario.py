@@ -1,5 +1,6 @@
 """Tests of the SVG scenarios (tapioca.inputs.svg.SVGScenario) and of the command line tools."""
 
+import shutil
 import sys
 
 import numpy as np
@@ -10,7 +11,9 @@ from tapioca.inputs import MandyocBuilder, TemperatureFieldBuilder, VelocityFiel
 from tapioca.inputs.svg import SVGInputError, SVGScenario
 from tapioca.inputs.svg import cli, reader
 
-from conftest import SVG_SCENARIOS, build_scenario, quiet, svg_path
+from tapioca import read_preset_temperature
+
+from conftest import CONTINENTAL_RIFT, SVG_SCENARIOS, build_scenario, quiet, svg_path
 
 
 @pytest.fixture(scope="module", params=list(SVG_SCENARIOS))
@@ -58,8 +61,8 @@ def test_interfaces_txt(written):
     n_params = len(tp.MATERIAL_PARAMETERS)
     assert sorted(line.split()[0] for line in lines[:n_params]) == sorted(tp.MATERIAL_PARAMETERS)
     values = {line.split()[0]: [float(v) for v in line.split()[1:]] for line in lines[:n_params]}
-    assert values["rho"] == [layer.density for layer in scenario.layers]
-    assert values["C"] == [layer.effective_viscosity_scale_factor for layer in scenario.layers]
+    assert values["rho"] == [layer.params["rho"] for layer in scenario.layers]
+    assert values["C"] == [layer.params["C"] for layer in scenario.layers]
     seed = [i for i, layer in enumerate(scenario.layers) if layer.layer_label == scenario.seed_label]
     assert all(values["weakening_seed"][i] == (1.0 if i in seed else -1.0) for i in range(len(scenario.layers)))
     depths = np.loadtxt(lines[n_params:])
@@ -95,10 +98,10 @@ def test_velocity_field(written):
     interior = scenario.VX[:, 1:-1]
     assert np.all(interior == 0), "velocity only at the boundaries"
     lithosphere = scenario.Z[:, 0] < scenario.thickness_sa[0] + scenario.h_v_const
-    v_cm = scenario.velocity / (100 * scenario.velocity_builder.unifac * 365 * 24 * 3600)  # cm/yr -> m/s of the SVG
+    v_ms = scenario.velocity * 0.01 / tp.SEC_PER_YEAR  # cm/yr -> m/s
     if moving_boundary == "symmetric":
         np.testing.assert_allclose(right, -left)
-        assert right[lithosphere & (scenario.Z[:, 0] > scenario.thickness_sa[0])].max() == pytest.approx(v_cm / 2)
+        assert right[lithosphere & (scenario.Z[:, 0] > scenario.thickness_sa[0])].max() == pytest.approx(v_ms / 2)
     elif regime == "compression":
         fixed = right if moving_boundary == "left" else left
         assert np.all(fixed == 0), "the opposite boundary is fixed"
@@ -159,13 +162,91 @@ def test_param_txt_keyword_arguments(tmp_path):
         scenario.write_all(str(tmp_path), plots=False, scripts=False, particles_per_element=100)
     assert _read_params(tmp_path)["particles_per_element"] == 100
     with pytest.raises(SVGInputError, match="Unknown parameter"):
-        scenario.param_text(not_a_parameter=1)
+        scenario.parameters(not_a_parameter=1)
+
+
+@pytest.mark.parametrize("n_params", [7, 13])
+def test_preset_initial_temperature(tmp_path, n_params):
+    """Preliminary scenario with temperature.nc (read with MandyocScen) and an interfaces.txt of 7 or 13 parameters."""
+    for fname in ["param.txt", "temperature.nc"]:
+        shutil.copy(CONTINENTAL_RIFT / fname, tmp_path / fname)
+    lines = (CONTINENTAL_RIFT / "interfaces.txt").read_text().splitlines()
+    if n_params == 13:  # the 6 parameters added to interfaces.txt with the 13 of DEFAULT_MATERIAL
+        n_layers = len(lines[0].split()) - 1
+        lines = lines[:7] + [f"{key} " + " ".join([str(tp.DEFAULT_MATERIAL[key])] * n_layers)
+                             for key in tp.MATERIAL_PARAMETERS[7:]] + lines[7:]
+    (tmp_path / "interfaces.txt").write_text("\n".join(lines) + "\n")
+    depth, profile, sa, litho, source = read_preset_temperature(str(tmp_path))
+    assert np.all(np.diff(depth) > 0) and profile.max() > 1300
+    assert sa == pytest.approx(40e3) and litho > 0
+    assert "interfaces from" in source
+    scenario = build_scenario("rifting", preset_initial_temperature=str(tmp_path))
+    with quiet():
+        T = scenario.build_temperature()
+    assert scenario.thickness_litho_preset == litho
+    assert T.min() == 0.0 and T.max() == pytest.approx(profile.max(), rel=0.05)
+
+
+WATER = """<rect id="water" inkscape:label="water" x="0" y="0" width="1600" height="45" style="fill:#4f9fd8;stroke:none">
+      <desc id="desc_water">air
+C = 1.0
+rho = 1000.0
+H = 0.0
+h = 2 km</desc>
+    </rect>
+    <rect id="air\""""
+
+
+@pytest.fixture
+def water_svg(tmp_path):
+    """The rifting example with a water layer (2 km) between the sticky air and the upper crust."""
+    svg = tmp_path / "rifting_water.svg"
+    svg.write_text(svg_path("rifting").read_text().replace('<rect id="air"', WATER, 1))
+    return svg
+
+
+def _labels(scenario):
+    return [layer.layer_label for layer in scenario.layers]
 
 
 def test_magmatism_extraction_adds_a_basalt_layer():
     scenario = build_scenario("rifting", magmatism="on", magmatism_extraction="on")
-    assert scenario.layers[-2].layer_label == "basalt"
+    assert _labels(scenario)[-2:] == ["basalt", "air"]
     assert scenario.magmatic_layer == len(scenario.layers) - 2
+
+
+def test_basalt_goes_below_the_water(water_svg):
+    with quiet():
+        scenario = SVGScenario(str(water_svg), dx=10, dz=10, verbose=False, water_layer="water",
+                               magmatism="on", magmatism_extraction="on")
+    assert _labels(scenario)[-3:] == ["basalt", "water", "air"]
+    assert scenario.magmatic_layer == len(scenario.layers) - 3 == scenario.surface_id
+    water = scenario.layers[scenario.water_layer]
+    np.testing.assert_allclose(scenario.thickness_sa, water.interface)  # the surface is the base of the water
+    np.testing.assert_allclose(water.interface - scenario.layers[-1].interface, 2e3)
+
+
+def test_water_without_basalt(water_svg):
+    with quiet():
+        scenario = SVGScenario(str(water_svg), dx=10, dz=10, verbose=False, water_layer="water")
+    assert _labels(scenario)[-2:] == ["water", "air"] and "basalt" not in _labels(scenario)
+    assert scenario.magmatic_layer == scenario.surface_id == len(scenario.layers) - 3
+
+
+def test_magmatic_layer_given_by_the_user():
+    """A layer of the SVG receives the melt: no basalt layer is added."""
+    scenario = build_scenario("rifting", magmatism="on", magmatism_extraction="on", magmatic_layer="upper_crust")
+    assert "basalt" not in _labels(scenario)
+    assert scenario.layers[scenario.magmatic_layer].layer_label == "upper_crust"
+    assert build_scenario("rifting", magmatic_layer=2).magmatic_layer == 2
+
+
+@pytest.mark.parametrize("settings, message", [({"water_layer": "lower_crust"}, "right below the sticky air"),
+                                               ({"water_layer": "ocean"}, "no unit labelled 'ocean'"),
+                                               ({"magmatic_layer": 99}, "IDs 0 to")])
+def test_water_and_magmatic_layer_errors(settings, message):
+    with pytest.raises(SVGInputError, match=message):
+        build_scenario("rifting", **settings)
 
 
 def test_missing_svg_is_an_error(tmp_path):

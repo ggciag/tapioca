@@ -12,18 +12,13 @@ from ..._variables import DEFAULT_MATERIAL, DEFAULT_MATERIALS
 
 #CLASSES
 
-## This class is creating a flat interface, it's could be called in the MandyocBuilder.create_interface().
-## Also, it's missing many properties.
-## The "params" attribute is the same thing of using a dictionary
-## The redundancy is: you create a rheology from a dict, pass the rheology to the layer
-## the layer converts the rheology to a dictionary again.
 ## I think the MandyocLayer could be only a interface (xr.DataArray) in the MandyocBuilder.DTree.interfaces (xr.Dataset)
 class MandyocLayer:
-    def __init__(self, layer_label, rheology,
-                 density, effective_viscosity_scale_factor=1.0, radiogenic_heat_production=0.0,
-                 base_depth=0.0e3, Nx=None):
+    def __init__(self, layer_label, rheology, Nx, base_depth=0.0, title=None, color="#808080",
+                 reference_thickness=None, **params):
         """
-        This class creates a layer with the given properties
+        A layer of the stack of an SVG scenario: its material (params), its interface (depth of its base along
+        x) and the attributes of the drawing (title, color, reference thickness h).
 
         Parameters
         ----------
@@ -31,52 +26,46 @@ class MandyocLayer:
             Name of the layer
         rheology: LithologicalUnit or str
             Rheology of the layer, e.g. WET_OLIVINE or its name ("wet olivine", see get_rheology)
-        density: float
-            Density of the layer [kg/m3]
-        interface: NoneType or np.array
-            Interface of the layer.
-            If None, the interface will be setted after the creation of the Layer.
-            If np.array, the interface is defined by the given array.
-        effective_viscosity_scale_factor: float
-            Scale factor for the effective vistocisty
-        radiogenic_heat_production: float
-            Radiogenic heat production of the layer [W/kg]
-        base_depth: float
-            Depth of the layer base [m]
         Nx: int
             Number of points in x direction
-        """
+        base_depth: float
+            Depth of the layer base [m] (the interface is flat until it is set)
+        title: str, optional
+            Name of the layer in the legend of the figures (Title of the shape in the SVG). Default: layer_label.
+        color: str, optional
+            Color of the layer in the figures (fill of the shape in the SVG). Default: grey.
+        reference_thickness: float, optional
+            Reference thickness h of the unit [m], given in the SVG description (None if not given).
+        params: keyword arguments
+            Parameters of the layer with the keys of tapioca.DEFAULT_MATERIAL (rho, C, H, A, n, Q, V, k,
+            weakening_seed, cohesion_min, ...); they replace the ones of the rheology.
 
+        Attributes
+        ----------
+        params: dict
+            The 13 parameters of interfaces.txt (those of the rheology, replaced by the ones given).
+        given: dict
+            The parameters given to the layer (e.g. in the description of the SVG).
+        """
         self.layer_label = layer_label
         self.rheology = rheology if(isinstance(rheology, LithologicalUnit)) else get_rheology(rheology)
-        self.density = density
-        self.effective_viscosity_scale_factor = effective_viscosity_scale_factor
-        self.radiogenic_heat_production = radiogenic_heat_production
         self.rheology_name = self.rheology.name
-        self.pre_exponential_constant = self.rheology.pre_exponential_constant
-        self.power_law_exponent = self.rheology.power_law_exponent
-        self.activation_energy = self.rheology.activation_energy
-        self.activation_volume = self.rheology.activation_volume
+        unknown = set(params) - set(DEFAULT_MATERIAL)
+        if unknown:
+            raise ValueError(f"Unknown parameter(s) of {layer_label}: {', '.join(sorted(unknown))}. Use {', '.join(DEFAULT_MATERIAL)}.")
+        self.given = dict(params)
+        self.params = {**self.rheology.params, **params}
         self.base_depth = base_depth
         self.Nx = Nx
-
+        self.title = title if title is not None else layer_label
+        self.color = color
+        self.reference_thickness = reference_thickness
         self.interface = np.ones(Nx)*base_depth
 
     def material(self):
-        '''
-        Parameters of the layer in interfaces.txt (the keys of tapioca.DEFAULT_MATERIAL), as given to
-        MandyocBuilder.create_interface: those of the rheology, replaced by the ones of the layer (C, rho, H,
-        A, n, Q, V and any other key set as an attribute, e.g. cohesion_max given in the SVG description).
-        '''
-        params = dict(self.rheology.params)
-        params.update(C=self.effective_viscosity_scale_factor, rho=self.density, H=self.radiogenic_heat_production,
-                      A=self.pre_exponential_constant, n=self.power_law_exponent, Q=self.activation_energy,
-                      V=self.activation_volume)
-        params.update({key: getattr(self, key) for key in DEFAULT_MATERIAL if hasattr(self, key)})
-        return params
+        '''Parameters of the layer in interfaces.txt (the keys of tapioca.DEFAULT_MATERIAL), as given to MandyocBuilder.create_interface.'''
+        return dict(self.params)
 
-## Why cohesion, friction, k, etc are not properties? 
-## I like the class, but I don't know the real gain comparing with a dictionary with the properties
 class LithologicalUnit:
     """
     Generic material: a name and the parameters of interfaces.txt (the keys of tapioca.DEFAULT_MATERIAL:
@@ -95,23 +84,6 @@ class LithologicalUnit:
             raise ValueError(f"Unknown parameter(s) of {name}: {', '.join(sorted(unknown))}. Use {', '.join(DEFAULT_MATERIAL)}.")
         self.name = name
         self.params = {**DEFAULT_MATERIAL, **params}
-
-    # flow law with the names used by MandyocLayer
-    @property
-    def pre_exponential_constant(self):
-        return self.params["A"]
-
-    @property
-    def power_law_exponent(self):
-        return self.params["n"]
-
-    @property
-    def activation_energy(self):
-        return self.params["Q"]
-
-    @property
-    def activation_volume(self):
-        return self.params["V"]
 
     def __repr__(self):
         return f"LithologicalUnit({self.name!r}, {', '.join(f'{k}={v}' for k, v in self.params.items())})"

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- Example of the quiescence regime: cratonic keel with a mobile belt in the centre of the domain
      (cratonic_keel experiment of generate_input_files_database.py). No velocity is imposed at the boundaries.
-     4000 x 600 km, 1 user unit = 1 km, page = model domain (see the 'domain' rectangle for Lx, Lz, dx, dz and the experiment).
+     4000 x 600 km, 1 user unit = 1 km, page = model domain (see the 'setup' rectangle for Lx, Lz, dx, dz and the experiment).
      Lithosphere (everywhere): upper crust 20 km, lower crust 15 km, lithospheric mantle 85 km (120 km below the surface).
      Cratonic keel (x = 1400-2600 km, L_keel = 1200 km): lithospheric mantle down to 290 km below the page top
        (250 km below the surface, 130 km thicker than outside).
@@ -30,7 +30,7 @@
   <g
      inkscape:groupmode="layer"
      id="layer1"
-     inkscape:label="litologias">
+     inkscape:label="lithologies">
     <rect
        id="asthenosphere"
        inkscape:label="asthenosphere"
@@ -156,20 +156,20 @@ V = 0.0</desc>
   </g>
   <g
      inkscape:groupmode="layer"
-     id="layer_domain"
-     inkscape:label="dominio">
+     id="layer_setup"
+     inkscape:label="domain">
     <rect
-       id="domain"
-       inkscape:label="domain"
+       id="setup"
+       inkscape:label="setup"
        x="0"
        y="0"
        width="4000"
        height="600"
        style="fill:none;stroke:#ff0000;stroke-width:1">
       <title
-         id="title_domain">Model domain</title>
+         id="title_setup">Model setup</title>
       <desc
-         id="desc_domain">Lx = 4000 km
+         id="desc_setup">Lx = 4000 km
 Lz = 600 km
 dx = 2 km
 dz = 2 km
@@ -177,7 +177,7 @@ regime = quiescence
 magmatism = off
 magmatism_extraction = off
 magmatism_Ts0 = 1080
-# preset_initial_temperature = ../preliminary   (folder of a preliminary scenario with its _output_temperature.nc)</desc>
+# preset_initial_temperature = ../preliminary   (folder of a preliminary scenario with its temperature.nc)</desc>
     </rect>
   </g>
 </svg>

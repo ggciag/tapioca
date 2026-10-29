@@ -59,7 +59,8 @@ docs = [
     "myst-parser",
     "sphinx",
     "pydata-sphinx-theme",
-    "sphinx-copybutton"
+    "sphinx-copybutton",
+    "sphinxcontrib-mermaid"
 ]
 
 [tool.setuptools.packages.find]

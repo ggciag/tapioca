@@ -25,28 +25,27 @@ the input files and figures. The source code is in `inputs/svg/scenario.py`.
    SVGScenario.write_scripts
    SVGScenario.build_temperature
    SVGScenario.build_velocity
-   SVGScenario.param_text
+   SVGScenario.parameters
    SVGScenario.scale_bcv
    SVGScenario.infos
    SVGScenario.plot_setup
    SVGScenario.plot_temperature
    SVGScenario.yield_strength_envelope
-   read_preset_temperature
-   adapt_preset_temperature
 ```
 
 Example:
 ```python
 from tapioca.inputs.svg import SVGScenario
 
-scenario = SVGScenario("rifting.svg", regime="accordion", quiescence_time=300)
+scenario = SVGScenario("rifting.svg", regime="accordion", quiescence_time=0)
 scenario.write_all("my_scenario", particles_per_element=100)  # keyword arguments change param.txt
 ```
 
 `SVGScenario` is built on the generic builders: `scenario.builder` is a `MandyocBuilder` with the interfaces
-and the material fields of the SVG, the temperature is solved by a `TemperatureFieldBuilder`
-(`solve_conductive_columns`) and the boundary velocities are given to a `VelocityFieldBuilder`. The input files are
-exported by `scenario.builder`, so they can be changed by script before writing:
+and the material fields of the SVG, the temperature is solved by a `TemperatureFieldBuilder` (`solve_heat_2D`, or
+`solve_heat_1D` with `temperature_solver="columns"`) and the boundary velocities of the regime are set by
+`VelocityFieldBuilder.set_kinematic_regime`. The settings are checked by `SVGChecks` (`inputs/checks.py`). The input
+files are exported by `scenario.builder`, so they can be changed by script before writing:
 
 ```python
 scenario = SVGScenario("rifting.svg")
@@ -60,7 +59,7 @@ scenario.write_all("my_scenario")
 
 The same from the command line (installed with the package):
 ```bash
-tapioca-svg rifting.svg -o my_scenario --regime accordion --quiescence-time 300
+tapioca-svg rifting.svg -o my_scenario --regime accordion --quiescence-time 0
 ```
 
 The run script of Mandyoc is written for the system that runs tapioca (`run_linux.sh` or `run_mac.sh`).
@@ -73,7 +72,7 @@ tapioca-svg rifting.svg -o my_scenario --system linux --ncores 20 --mandyoc-opti
 
 ## Geometry and materials from SVG files
 
-Functions to read the domain and the units of the SVG and build the interfaces. The source code is in `inputs/svg/reader.py`.
+Functions to read the setup shape and the units of the SVG and build the interfaces. The source code is in `inputs/svg/reader.py`.
 `layers_to_builder` turns the layers of the SVG into a `MandyocBuilder`, and `write_interfaces` exports its `interfaces.txt`
 (with the 13 parameters of `tapioca.DEFAULT_MATERIAL`).
 
@@ -83,13 +82,35 @@ Functions to read the domain and the units of the SVG and build the interfaces. 
 .. autosummary::
    :toctree: ../generated/
 
-   read_domain
+   read_setup
    read_units
    layers_from_svg
    layers_to_builder
    write_interfaces
    plot_layers
-   SVGInputError
+   layer_thickness
+```
+
+The errors of the SVG and of the settings are `SVGInputError` (`inputs/checks.py`, a `ValueError`).
+
+---
+
+## Preset of the initial temperature
+
+Functions of `tapioca._aux_functions` used with `preset_initial_temperature`: the final thermal state of a
+preliminary scenario (read with `MandyocScen`, or from its `temperature_*.txt`) adapted to the lithosphere of
+each column of the new scenario.
+
+```{eval-rst}
+.. currentmodule:: tapioca._aux_functions
+
+.. autosummary::
+   :toctree: ../generated/
+
+   read_preset_temperature
+   adapt_preset_temperature
+   read_interfaces
+   convert_units
 ```
 
 Only the interfaces from the command line:

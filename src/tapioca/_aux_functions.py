@@ -1,4 +1,4 @@
-import os, gc, json, sys, glob
+import os, gc, json, sys, glob, re
 
 import numpy as np
 import xarray as xr
@@ -10,10 +10,11 @@ from numba import jit
 
 from pathlib import Path
 
-from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARAMS_TYPES
+from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARAMS_TYPES,UNITS
 
-__all__ = ["read_params","evaluate_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
-           "_numba_diffusion_loop", "_conductive_columns",
+__all__ = ["read_params","evaluate_params","read_data","read_interfaces","split_unit","convert_units",
+           "find_nearest","most_common","read_preset_temperature","adapt_preset_temperature","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
+           "_numba_diffusion_loop",
            "spsolve_heat_col","build_diagonals_2D",
            "_Druker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
 
@@ -117,7 +118,9 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
     data = pd.read_csv(file, header=None, 
                        skiprows=2, comment='P')
     
-    data = data.to_numpy()
+    ## FIX (Claude, SVG): with pandas >= 3 (copy-on-write) to_numpy() returns a read-only array and the
+    ## assignment below raised "assignment destination is read-only"; .copy() makes it writable.
+    data = data.to_numpy().copy()
 
     if not(veloc) and not(surface):
         data[np.abs(data) < 1.0e-200] = 0 #converter numeros pequenos e grandes
@@ -132,6 +135,204 @@ def read_data(file: str, Nx: int, Nz: int, veloc:bool=False, surface:bool=False)
         vy = np.reshape(data[1::2], (Nx,Nz), order='F')
         data = (vx.T, vy.T)
     return data
+
+def read_interfaces(file:str|Path):
+    '''
+    Reads an `interfaces.txt` of Mandyoc (the counterpart of `MandyocBuilder.export_interfaces`).
+    The parameter lines (name followed by one value per layer) may be any subset of the
+    material parameters, e.g. the 7 parameters of older scenarios or the 13 of `DEFAULT_MATERIAL`.
+
+    Parameters
+    ----------
+    file : str or Path
+        The interfaces.txt file.
+
+    Returns
+    -------
+    dict
+        Material parameters: {name: np.array with one value per layer, from the bottom to the top}.
+    np.ndarray
+        Interfaces (Nx, n_interfaces): z of each interface (m, negative downwards), from the bottom to the top.
+    '''
+    params, rows = {}, []
+    with open(file, 'r') as f:
+        for line in f:
+            values = line.split()
+            if not values:
+                continue
+            try:
+                rows.append([float(v) for v in values])
+            except ValueError:
+                params[values[0]] = np.array([float(v) for v in values[1:]])
+    return params, np.array(rows, ndmin=2)
+
+def split_unit(text:str, quantity:str):
+    '''
+    Splits a text such as "120 km" or "1 cm/yr" into the number (text) and the factor of its unit in
+    `UNITS[quantity]` (to m, yr, cm/yr or oC). The factor is None if the text has no unit.
+    '''
+    units = UNITS[quantity]
+    text = str(text).strip()
+    for unit in sorted(units, key=len, reverse=True): # longest first: "Myr" before "yr"
+        if text.endswith(unit) and (len(text) == len(unit) or not text[-len(unit)-1].isalpha()):
+            return text[:-len(unit)].strip(), units[unit]
+    return text, None
+
+def convert_units(text:str, quantity:str, default:str=None):
+    '''
+    Converts a text with a number and a unit (e.g. "120 km", "1 cm/yr", "300 Myr") to the base
+    unit of the quantity in `UNITS` (m, yr, cm/yr or oC).
+
+    Parameters
+    ----------
+    text : str
+        Number followed by one of the units of `UNITS[quantity]`.
+    quantity : str
+        'length', 'time', 'velocity' or 'temperature'.
+    default : str, optional
+        Unit of a number given without unit. If None, the unit is required.
+
+    Returns
+    -------
+    float
+        The value in the base unit.
+    '''
+    number, factor = split_unit(text, quantity)
+    if factor is None:
+        if default is None:
+            raise ValueError(f"'{text}' needs a unit of {quantity}: {', '.join(UNITS[quantity])}")
+        factor = UNITS[quantity][default]
+    return float(number) * factor
+
+def find_nearest(array, value):
+    '''Return the index in array nearest to a given value.'''
+    array = np.asarray(array)
+    return (np.abs(array - value)).argmin()
+
+def most_common(values, decimals=-2):
+    '''Most common value of values rounded to decimals (default: 100 m).'''
+    v, c = np.unique(np.round(values, decimals), return_counts=True)
+    return v[np.argmax(c)]
+
+def read_preset_temperature(path):
+    '''
+    Horizontal mean of the final temperature field of a preliminary scenario.
+
+    Parameters
+    ----------
+    path: str
+        Folder of the preliminary scenario, with temperature.nc (read with MandyocScen) or with param.txt and the
+        temperature_*.txt of Mandyoc, or a NetCDF file with its temperature (e.g. _output_temperature.nc).
+        The interfaces.txt of the folder (or of a folder inputs* in it) gives its sticky air and lithosphere.
+
+    Returns
+    -------
+    depth: depth of the nodes from the top of the domain [m] (increasing)
+    profile: horizontal mean of the temperature [oC]
+    thickness_sa: thickness of the sticky air [m]
+    thickness_litho: thickness of the lithosphere [m] (None if the interfaces.txt of the scenario is not found)
+    source: description of the field used
+    '''
+    folder = os.path.dirname(path) if(os.path.isfile(path)) else path
+
+    if(os.path.isfile(path)): #NetCDF file with the temperature
+        with xr.open_dataset(path) as dataset:
+            temperature = dataset.temperature.isel(time=-1)
+            z, profile = temperature.z.values, temperature.mean(dim='x').values
+            source = f"{path} (time = {float(dataset.time[-1]):g} Myr)"
+    elif(os.path.isfile(os.path.join(folder, 'temperature.nc'))):
+        from .scenClasses import MandyocScen  # here to avoid a circular import
+        scenario = MandyocScen(folder, variables='temperature')
+        temperature = scenario.DTree['/mesh/original'].temperature.isel(time=-1)
+        z, profile = temperature.z.values, temperature.mean(dim='x').values
+        source = f"{folder}/temperature.nc (time = {float(temperature.time):g} Myr)"
+    else:
+        if(not os.path.isfile(os.path.join(folder, 'param.txt'))):
+            raise FileNotFoundError(f"preset_initial_temperature: no temperature.nc nor param.txt in {folder}")
+        params = read_params(os.path.join(folder, 'param.txt'))
+        steps = [int(m.group(1)) for m in (re.fullmatch(r'temperature_(\d+)\.txt', os.path.basename(f))
+                 for f in glob.glob(os.path.join(folder, 'temperature_*.txt'))) if m]
+        if(len(steps) == 0):
+            raise FileNotFoundError(f"preset_initial_temperature: no temperature_*.txt in {folder}")
+        fname = os.path.join(folder, f"temperature_{max(steps)}.txt") #final thermal structure
+        z = np.linspace(-params['lz'], 0, params['nz'])
+        profile = np.mean(read_data(fname, params['nx'], params['nz']), axis=1) #(Nz, Nx), from the bottom to the top
+        source = fname
+
+    depth = -z
+    order = np.argsort(depth)
+    depth, profile = depth[order], profile[order]
+
+    #thickness of the sticky air (last interface) and of the lithosphere (first interface = top of the asthenosphere)
+    #from the interfaces.txt of the preliminary scenario (most common values along x). Without it, the sticky air is
+    #the depth where the temperature starts to increase and the lithosphere is unknown (None).
+    thickness_sa, thickness_litho = None, None
+    for fname in [os.path.join(folder, 'interfaces.txt')] + sorted(glob.glob(os.path.join(folder, 'inputs*', 'interfaces.txt'))):
+        if(os.path.isfile(fname)):
+            interfaces_preset = -read_interfaces(fname)[1] #depth of the interfaces (Nx, n_interfaces)
+            thickness_sa = most_common(interfaces_preset[:, -1])
+            thickness_litho = most_common(interfaces_preset[:, 0]) - thickness_sa
+            source += f", interfaces from {fname}"
+            break
+    if(thickness_sa is None):
+        thickness_sa = depth[max(np.argmax(profile > 1.0) - 1, 0)]
+
+    return depth, profile, thickness_sa, thickness_litho, source
+
+def adapt_preset_temperature(depth_ref, T_ref, sa_ref, litho_ref, z, thickness_sa, thickness_litho, thickness_mantle):
+    '''
+    Initial temperature field (Nz, Nx) from the horizontal mean profile of a preliminary scenario,
+    adapted to the lithosphere of each column:
+
+    - columns with the reference lithosphere thickness litho_ref: the profile itself (as a function of the
+      depth below the surface);
+    - other columns (keels, thinned or oceanic lithosphere, ...): the profile in the crust, a linear geotherm
+      in the lithospheric mantle from the Moho down to the base of the lithosphere, and the asthenospheric
+      profile below it. Where the lithosphere is thinner than litho_ref, the asthenospheric profile is
+      extended upwards with a linear fit (adiabat) of the profile below litho_ref + 50 km.
+
+    Parameters
+    ----------
+    depth_ref, T_ref: np.array
+        Depth from the top [m] and temperature [oC] of the profile
+    sa_ref: float
+        Sticky air thickness of the profile [m]
+    litho_ref: float
+        Lithosphere thickness of the preliminary scenario [m]
+    z: np.array
+        Depth of the nodes [m]
+    thickness_sa, thickness_litho, thickness_mantle: np.array
+        Thicknesses along x [m]
+    '''
+    d_ref = depth_ref - sa_ref #depth below the surface in the preliminary scenario
+    cond = (d_ref >= litho_ref + 50.0e3) & (d_ref <= d_ref.max() - 50.0e3)
+    a, b = np.polyfit(d_ref[cond], T_ref[cond], 1) #asthenospheric profile
+
+    def T_profile(d):
+        '''Profile at depth d below the surface (extended below the preliminary domain with the fit)'''
+        return np.where(d > d_ref.max(), a*d + b, np.interp(d, d_ref, T_ref))
+
+    columns = np.round(np.vstack([thickness_sa, thickness_litho, thickness_mantle]), 1)
+    columns_unique, idx_columns = np.unique(columns, axis=1, return_inverse=True)
+    T_unique = np.zeros((len(z), columns_unique.shape[1]))
+    for k, (sa, litho, mantle) in enumerate(columns_unique.T):
+        d = z - sa #depth below the surface
+        if(abs(litho - litho_ref) < 1.0e3): #reference lithosphere
+            Tk = T_profile(d)
+        else:
+            moho = litho - mantle
+            T_below = T_profile(d) if(litho >= litho_ref) else np.maximum(T_profile(d), a*d + b) #asthenosphere
+            T_lab = T_profile(litho) if(litho >= litho_ref) else max(float(T_profile(litho)), a*litho + b)
+            T_moho = T_profile(moho)
+            Tk = np.where(d <= moho, T_profile(d), T_below)
+            in_mantle = (d > moho) & (d < litho)
+            if(litho > moho):
+                Tk[in_mantle] = T_moho + (T_lab - T_moho) * (d[in_mantle] - moho) / (litho - moho)
+        Tk[d <= 0] = 0.0 #sticky air
+        T_unique[:, k] = Tk
+    T = T_unique[:, idx_columns.ravel()]
+    T[T <= 1.0e-7] = 0.0 #dealing with <=0 values inherited from interpolation
+    return T
 
 def ensure_directory_exists(folder_path: str|Path):
     """
@@ -237,65 +438,8 @@ def _numba_diffusion_loop(T, kappa, H, c_cap, dx, dz, dt, num_steps, cond):
             
     return T
 
-## This solution considers a constant diffusivity for the whole column
-## looks like a simplified version of the TemperatureFieldBuilder.solve_heat_diffusion1D
-def _conductive_columns(depth:np.ndarray, thickness_sa:np.ndarray, thickness_litho:np.ndarray, H:np.ndarray,
-                        dt:float, num_steps:int, t_pot:float=1400.0, delta_T:float=0.0, kappa:float=1.0e-6,
-                        c_cap:float=1250.0, alpha:float=3.28e-5, g:float=-10.0, t_litho:float=1300.0):
-    '''
-    Conductive temperature (Nz, Nx), solved in 1D (vertical) only for the distinct columns
-    (same sticky air, lithosphere and radiogenic heat profile), so a lithosphere that varies
-    along x costs one 1D solution per distinct column.
-
-    The initial guess is linear from 0 oC at the base of the sticky air to `t_litho` at the base of the
-    lithosphere, limited by the adiabat of the asthenosphere (t_pot + delta_T). The nodes in the sticky
-    air (0 oC) and in the asthenosphere keep their initial temperature (Dirichlet), and the lithosphere
-    evolves with the explicit (forward Euler) scheme for num_steps steps of dt.
-
-    Parameters
-    ----------
-    depth: np.ndarray
-        Depth of the nodes from the top of the model (positive downwards, in m), shape (Nz,).
-    thickness_sa, thickness_litho: np.ndarray
-        Thickness of the sticky air and of the lithosphere in each column (in m), shape (Nx,).
-    H: np.ndarray
-        Radiogenic heat production (in W/kg), shape (Nz, Nx).
-    dt: float
-        Time step (in s).
-    num_steps: int
-        Number of time steps.
-    t_pot, delta_T, t_litho: float, optional
-        Potential temperature of the mantle, its increase and the temperature at the base of the
-        lithosphere of the initial guess (in oC).
-    kappa, c_cap, alpha, g: float, optional
-        Thermal diffusivity (m2/s), heat capacity (J/kg/K), thermal expansion coefficient (1/K) and
-        gravity acceleration (m/s2, negative downwards).
-    '''
-    dz = (depth.max() - depth.min()) / (len(depth) - 1)
-    columns =np.vstack([thickness_sa, thickness_litho, H])
-    columns_unique, idx_columns = np.unique(columns, axis=1, return_inverse=True)
-    idx_columns = idx_columns.ravel()
-    sa_col, litho_col, H = columns_unique[0], columns_unique[1], columns_unique[2:]
-
-    zcol = depth[:, None]
-    T = t_litho * (zcol - sa_col) / (litho_col)
-    Ta = (t_pot / np.exp(g * alpha * (zcol - sa_col) / c_cap)) + delta_T #asthenosphere
-
-    T[T < 0.0] = 0.0
-    cond1 = Ta < T #where the asthenosphere temperature is lower than the lithospheric one
-    T[T > Ta] = Ta[T > Ta]
-
-    Taux = np.copy(T)
-    cond = cond1 | (T == 0)
-    for step in range(num_steps):
-        T[1:-1] += (
-            kappa * dt * ((T[2:] + T[:-2] - 2 * T[1:-1]) / dz ** 2)
-            + H[1:-1] * dt / c_cap
-        )
-        T[cond] = Taux[cond]
-
-    return T[:, idx_columns], len(sa_col)
-
+## BUG (Claude, docstring): the code is right for the Mandyoc order (index 0 = base of the lithosphere, index -1 =
+## surface), but the docstring says that Tsurf is applied to the bottom node (index -1) and Tlab to the top (index 0).
 def spsolve_heat_col(T, k_nodes, H, Tsurf, Tlab, dz):
     """
     This function solves the 1D steady state heat diffusion equation on a single vertical 
@@ -358,7 +502,7 @@ def spsolve_heat_col(T, k_nodes, H, Tsurf, Tlab, dz):
     return T
 
 @jit(nopython=True,cache=True)
-def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_bot, T_top,ZZ,Tmesh,lab_surf):
+def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_top,ZZ,Tmesh,lab_surf,bot_bc='adiabatic'):
     """
     Fast matrix assembly using Numba. 
     This functions is made to solve 2D steady state heat equation.
@@ -387,12 +531,24 @@ def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_bot, T_top,ZZ,Tmesh,lab_sur
                 b[idx] = T_top
                 continue
 
-            # check asthenosphere
-            if ZZ[i,j] <= -lab_surf[j]:
+            if bot_bc.lower() == 'adiabatic': # keeps pre set temperature
+                # check asthenosphere
+                if ZZ[i,j] <= -lab_surf[j]:
+                    diag_main[idx] = 1.0
+                    b[idx] = Tmesh[i,j]
+                    continue
+            
+            else:
+                if i == 0: # fix only the bottom of the model
+                    diag_main[idx] = 1.0
+                    b[idx] = Tmesh[i,j]
+                    continue
+
+            # air (i = Nz-1), in case there is no sticky air layer
+            if i == Nz - 1:
                 diag_main[idx] = 1.0
-                b[idx] = Tmesh[i,j]
+                b[idx] = T_top                 # fallback: treat top row as surface
                 continue
-                
             # --- 2. Interior and Side Boundaries ---
             
             # Vertical harmonic means (Always exist for interior nodes)
@@ -431,65 +587,6 @@ def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_bot, T_top,ZZ,Tmesh,lab_sur
             
     return diag_down, diag_left, diag_main, diag_right, diag_up, b
 
-## This solution considers a constant diffusivity for the whole column
-## looks like a simplified version of the TemperatureFieldBuilder.solve_heat_diffusion1D
-def _conductive_columns(depth:np.ndarray, thickness_sa:np.ndarray, thickness_litho:np.ndarray, H:np.ndarray,
-                        dt:float, num_steps:int, t_pot:float=1400.0, delta_T:float=0.0, kappa:float=1.0e-6,
-                        c_cap:float=1250.0, alpha:float=3.28e-5, g:float=-10.0, t_litho:float=1300.0):
-    '''
-    Conductive temperature (Nz, Nx), solved in 1D (vertical) only for the distinct columns
-    (same sticky air, lithosphere and radiogenic heat profile), so a lithosphere that varies
-    along x costs one 1D solution per distinct column.
-
-    The initial guess is linear from 0 oC at the base of the sticky air to `t_litho` at the base of the
-    lithosphere, limited by the adiabat of the asthenosphere (t_pot + delta_T). The nodes in the sticky
-    air (0 oC) and in the asthenosphere keep their initial temperature (Dirichlet), and the lithosphere
-    evolves with the explicit (forward Euler) scheme for num_steps steps of dt.
-
-    Parameters
-    ----------
-    depth: np.ndarray
-        Depth of the nodes from the top of the model (positive downwards, in m), shape (Nz,).
-    thickness_sa, thickness_litho: np.ndarray
-        Thickness of the sticky air and of the lithosphere in each column (in m), shape (Nx,).
-    H: np.ndarray
-        Radiogenic heat production (in W/kg), shape (Nz, Nx).
-    dt: float
-        Time step (in s).
-    num_steps: int
-        Number of time steps.
-    t_pot, delta_T, t_litho: float, optional
-        Potential temperature of the mantle, its increase and the temperature at the base of the
-        lithosphere of the initial guess (in oC).
-    kappa, c_cap, alpha, g: float, optional
-        Thermal diffusivity (m2/s), heat capacity (J/kg/K), thermal expansion coefficient (1/K) and
-        gravity acceleration (m/s2, negative downwards).
-    '''
-    dz = (depth.max() - depth.min()) / (len(depth) - 1)
-    columns =np.vstack([thickness_sa, thickness_litho, H])
-    columns_unique, idx_columns = np.unique(columns, axis=1, return_inverse=True)
-    idx_columns = idx_columns.ravel()
-    sa_col, litho_col, H = columns_unique[0], columns_unique[1], columns_unique[2:]
-
-    zcol = depth[:, None]
-    T = t_litho * (zcol - sa_col) / (litho_col)
-    Ta = (t_pot / np.exp(g * alpha * (zcol - sa_col) / c_cap)) + delta_T #asthenosphere
-
-    T[T < 0.0] = 0.0
-    cond1 = Ta < T #where the asthenosphere temperature is lower than the lithospheric one
-    T[T > Ta] = Ta[T > Ta]
-
-    Taux = np.copy(T)
-    cond = cond1 | (T == 0)
-    for step in range(num_steps):
-        T[1:-1] += (
-            kappa * dt * ((T[2:] + T[:-2] - 2 * T[1:-1]) / dz ** 2)
-            + H[1:-1] * dt / c_cap
-        )
-        T[cond] = Taux[cond]
-
-    return T[:, idx_columns], len(sa_col)
-
 def _Druker_Prager_YS(c:float, Phi:float, P:float):
     '''
     Gives the plastic Yield Stress (in Pa) according to the Druker-Prager criterion:
@@ -525,6 +622,8 @@ def _visc_dislocation_creep(strain_rate:float, A:float, C:float, n:float, Q:floa
     return C * A**(-1./n) * strain_rate**((1.0-n)/n)*np.exp((Q + V*P)/(n*R*T))
 
 
+## BUG (Claude): with an int reference that is not an ID of the dataset, get_interface returns None (no error),
+## so e.g. TemperatureFieldBuilder fails later with an unrelated error. A KeyError like the one for names would help.
 def get_interface(interfaces_ds, reference:str|int):
     """
     Get a scenario builder (`MandyocBuilder`) and return an interface 

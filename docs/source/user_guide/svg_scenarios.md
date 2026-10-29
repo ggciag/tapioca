@@ -14,6 +14,13 @@ from tapioca.inputs.svg import SVGScenario
 SVGScenario("scenario.svg").write_all("my_scenario")
 ```
 
+The SVG must be an SVG 1.1 file saved by Inkscape (tested with Inkscape 1.4.4): tapioca reads the object
+properties of Inkscape (label, title and description) and the shapes with `svgelements`, so curves,
+transforms and groups may be used. A file that declares another SVG version, or that was saved by another
+version of Inkscape, is read with a warning: check the layers (e.g. with `tapioca-svg-interfaces --plot`), since
+a new version could change how the drawing is stored. The versions of the file are recorded in
+`infos_<folder>.txt`.
+
 The output folder receives `interfaces.txt`, `param.txt`, `input_temperature_0.txt`,
 `input_velocity_0.txt`, `vel_bc.txt`, `velz_bc.txt`, `scale_bcv.txt` (accordion), `infos_<folder>.txt`,
 a copy of the SVG and the figures `numerical_setup.png` and `initial_temperature.png`.
@@ -51,7 +58,9 @@ h = 10 km
 `C` (viscosity scale factor), `rho` (density) and `H` (radiogenic heat production, W/kg) are required.
 `k`, `weakening_seed`, `cohesion_min`, `cohesion_max`, `friction_angle_min` and `friction_angle_max` are also
 accepted and, like `A`, `n`, `Q` and `V`, take the values of the rheology when they are not given:
-`interfaces.txt` has the 13 parameters of `tapioca.DEFAULT_MATERIAL`.
+`interfaces.txt` has the 13 parameters of `tapioca.DEFAULT_MATERIAL`. The keys are those of
+`DEFAULT_MATERIAL` (`rho`, `C`, `H`, ...); their names in `tapioca.INTERFACES_PARAMETERS` (`density`,
+`scale_factor`, `radiogenic_heat`, `thermal_diffusivity`, `weak_seed_strain`, ...) are also accepted.
 `A`, `n`, `Q` and `V` are optional and override the values of the rheology in `DEFAULT_MATERIALS` (the
 examples in `examples/svg_scenarios` give them, to keep the flow laws used before the materials were unified). A shape without description
 inherits the one of the group (e.g. an Inkscape layer) that contains it; shapes without any description
@@ -101,18 +110,21 @@ dz = 2 km
 regime = accordion
 velocity = 1 cm/yr
 moving_boundary = right
-quiescence_time = 300 Myr
+quiescence_time = 0 Myr
 time_max = 500 Myr
 magmatism = off
 magmatism_extraction = off
 magmatism_Ts0 = 1080
 preset_initial_temperature = ../preliminary
+temperature_solver = 2D
 ```
 
-Older SVGs with the shape labelled `domain` instead of `setup` are still read, with a warning.
+Only the shape labelled `setup` is read (older SVGs with a shape labelled `domain` must be renamed).
 
-Every setting can also be given to `SVGScenario` or on the command line (e.g. `--regime`, `--dx`), which
-overrides the SVG. Defaults:
+Every setting can also be given to `SVGScenario` (as a keyword argument, with or without units, e.g.
+`SVGScenario("scenario.svg", quiescence_time="0 Myr")`) or on the command line (e.g. `--regime`, `--dx`),
+which overrides the SVG. The units are those of `tapioca.UNITS` (km or m; Myr, kyr or yr; cm/yr or mm/yr; oC).
+Unknown settings and invalid values are errors (`SVGInputError`). Defaults:
 
 | Setting | Default | |
 |---|---|---|
@@ -121,9 +133,12 @@ overrides the SVG. Defaults:
 | `moving_boundary` | `right` | `left`, `right` or `symmetric` (rifting and accordion) |
 | `quiescence_time` | 0 Myr | accordion and quiescence regimes |
 | `time_max` | 60 Myr | rifting and compression; accordion: end of the second extension; quiescence: `quiescence_time` (or 1000 Myr) |
-| `magmatism`, `magmatism_extraction` | `off` | with both `on`, a basalt layer receives the extracted melt |
+| `magmatism`, `magmatism_extraction` | `off` | with both `on`, a basalt layer receives the extracted melt (see below) |
 | `magmatism_Ts0` | 1080 °C | |
+| `magmatic_layer` | basalt at the top | label (or ID from the bottom) of the layer that receives the extracted melt |
+| `water_layer` | none | label (or ID) of the unit drawn as water, right below the sticky air |
 | `preset_initial_temperature` | none | folder of a preliminary scenario (see below) |
+| `temperature_solver` | `2D` | `2D` or `columns` (see below) |
 | `min_thickness` | 1 km | thin layers left by overlapping shapes (see above); `0 km` keeps them |
 
 The accordion regime (as in the M300 experiments) scales the boundary velocity in time (`scale_bcv.txt`):
@@ -135,15 +150,32 @@ moving boundary (e.g. an oceanic plate pushed towards a continent), and the oppo
 
 With `moving_boundary = symmetric` (rifting and accordion), the reference frame is at the centre of the
 domain: both boundaries move outwards with `velocity`/2, each with its own return flow below the constant
-velocity, so that the integral of the inflow is zero on each boundary.
+velocity, so that the integral of the inflow is zero on each boundary. The profiles are set by
+`VelocityFieldBuilder.set_kinematic_regime`.
+
+## Water and magmatic layers
+
+tapioca does not guess which layer is the water or which one receives the melt: they are given by label (or by
+the ID of the layer, from the bottom) in `water_layer` and `magmatic_layer`.
+
+- `water_layer`: a unit drawn as water (e.g. with `air` rheology and `rho = 1000.0`), right below the sticky air.
+  The surface (top of the solid layers), used by the temperature and the velocity, is then its base.
+- `magmatic_layer`: by default, with `magmatism` and `magmatism_extraction` on, a basalt layer of zero thickness
+  is added at the top of the solid layers: below the water when there is water, otherwise below the sticky air.
+  A layer given in `magmatic_layer` (e.g. a basalt drawn in the SVG) is used as it is, and no basalt layer is
+  added.
 
 ## Initial temperature
 
-Without `preset_initial_temperature`, the initial temperature comes from a 1D conductive model solved for
-each column (lithosphere from the surface to the asthenosphere, radiogenic heat of the units).
+Without `preset_initial_temperature`, the initial temperature is the steady-state conduction in the lithosphere
+(`TemperatureFieldBuilder`): from 0 °C at the surface to the mantle potential temperature (1350 °C) at the top of
+the asthenosphere (LAB), with the conductivity and the radiogenic heat of each unit, and the mantle adiabat below
+the LAB. With `temperature_solver = 2D` (default) the whole lithosphere is solved at once (`solve_heat_2D`), so heat
+also flows sideways where the lithosphere changes along x (e.g. at the edge of a craton); with
+`temperature_solver = columns` each column is solved alone (`solve_heat_1D`).
 
-With `preset_initial_temperature` (folder with `_output_temperature.nc`, or with `param.txt` and
-`temperature_*.txt`), the initial temperature is the horizontal mean of the final temperature of that
+With `preset_initial_temperature` (folder with `temperature.nc`, read with `MandyocScen`, or with `param.txt` and
+`temperature_*.txt`, or a NetCDF file with the temperature), the initial temperature is the horizontal mean of the final temperature of that
 preliminary scenario, adapted to the lithosphere of each column: the columns with the lithosphere of the
 preliminary scenario (read from its `interfaces.txt`) keep the profile; the others (keels, thinned or oceanic
 lithosphere) keep it in the crust, get a linear geotherm in the lithospheric mantle down to the base of the

@@ -108,7 +108,7 @@ moving_boundary = symmetric
 magmatism = on
 magmatism_extraction = off
 magmatism_Ts0 = 1080
-# preset_initial_temperature = ../preliminary   (folder of a preliminary scenario with its _output_temperature.nc)</desc>
+# preset_initial_temperature = ../preliminary   (folder of a preliminary scenario with its temperature.nc)</desc>
     </rect>
   </g>
 </svg>

@@ -17,7 +17,7 @@
       ~SVGScenario.build_temperature
       ~SVGScenario.build_velocity
       ~SVGScenario.infos
-      ~SVGScenario.param_text
+      ~SVGScenario.parameters
       ~SVGScenario.plot_setup
       ~SVGScenario.plot_temperature
       ~SVGScenario.scale_bcv
@@ -33,18 +33,15 @@
 
    .. autosummary::
    
-      ~SVGScenario.DeltaT
       ~SVGScenario.TP
       ~SVGScenario.ccapacity
-      ~SVGScenario.conductive_dt
-      ~SVGScenario.conductive_time
       ~SVGScenario.dt_rifting2
       ~SVGScenario.fac_air
       ~SVGScenario.h_v_reference
-      ~SVGScenario.kappa
       ~SVGScenario.min_profile_width
       ~SVGScenario.profile_colors
       ~SVGScenario.ti_convergence
       ~SVGScenario.ti_quiescence
+      ~SVGScenario.verbose
    
    

@@ -15,6 +15,8 @@ tapioca-svg scenario.svg -o my_scenario
 ```
 
 See [examples/svg_scenarios](examples/svg_scenarios/README.md) and the user guide (*Scenarios from SVG files*).
+The SVG files must be SVG 1.1 saved by Inkscape 1.4 (tested with Inkscape 1.4.4); other versions are read with a
+warning, since a new version could change how the drawing is stored.
 
 Future implementations of tapIOca are planned to include:
 - A basic usage guide;
@@ -36,8 +38,10 @@ pip install -e .
 ## Tests
 
 The tests use [pytest](https://docs.pytest.org) and cover the variables and auxiliary functions, the materials,
-the generic builders (`tapioca.inputs`), the SVG scenarios of `examples/svg_scenarios` (on a coarse grid), the
-command line tools and the post-processing of `examples/continental_rift`. From the root of the repository:
+the generic builders (`tapioca.inputs`: temperature solvers and kinematic regimes), the checks of the input
+parameters, the SVG scenarios of `examples/svg_scenarios` (on a coarse grid, with water and magmatic layers and
+the preset of the initial temperature), the command line tools and the post-processing of
+`examples/continental_rift`. From the root of the repository:
 
 ```
 pip install -e ".[test]"   # or: conda install pytest

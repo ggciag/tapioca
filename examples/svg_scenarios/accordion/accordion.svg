@@ -15,7 +15,7 @@
    id="svg1"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns="http://www.w3.org/2000/svg">
-  <g inkscape:groupmode="layer" id="layer1" inkscape:label="litologias">
+  <g inkscape:groupmode="layer" id="layer1" inkscape:label="lithologies">
     <rect id="asthenosphere" inkscape:label="asthenosphere" x="0" y="0" width="1600" height="400" style="fill:#cfe2cd;stroke:none">
       <title id="title1">Asthenosphere</title>
       <desc id="desc1">wet olivine
@@ -162,20 +162,20 @@ V = 0.0</desc>
   </g>
   <g
      inkscape:groupmode="layer"
-     id="layer_domain"
-     inkscape:label="dominio">
+     id="layer_setup"
+     inkscape:label="domain">
     <rect
-       id="domain"
-       inkscape:label="domain"
+       id="setup"
+       inkscape:label="setup"
        x="0"
        y="0"
        width="1600"
        height="400"
        style="fill:none;stroke:#ff0000;stroke-width:1">
       <title
-         id="title_domain">Model domain</title>
+         id="title_setup">Model setup</title>
       <desc
-         id="desc_domain">Lx = 1600 km
+         id="desc_setup">Lx = 1600 km
 Lz = 400 km
 dx = 2 km
 dz = 2 km

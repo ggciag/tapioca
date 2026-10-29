@@ -26,7 +26,8 @@ extensions = [
     "sphinx.ext.autosummary", # Creates the neat Xarray-style API tables
     "sphinx.ext.intersphinx", # Link objects and classes to external docs
     'sphinx.ext.mathjax',
-    'sphinx_rtd_theme'
+    'sphinx_rtd_theme',
+    'sphinxcontrib.mermaid', # Draws the ```mermaid diagrams of the Markdown files
 ]
 
 # Parameters
@@ -42,6 +43,7 @@ intersphinx_mapping = {
 }
 
 myst_enable_extensions = ["dollarmath", "amsmath"]
+myst_fence_as_directive = ["mermaid"] # ```mermaid blocks are diagrams (sphinxcontrib.mermaid), as on GitHub
 
 source_suffix = {
     '.rst': 'restructuredtext',

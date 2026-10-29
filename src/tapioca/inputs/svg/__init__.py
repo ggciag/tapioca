@@ -11,8 +11,6 @@ Input builders for Mandyoc scenarios drawn in SVG files (e.g. made in Inkscape).
 # getting the same version of the whole module
 from ...__init__ import __version__
 
-# import svg # -> future development 
 from .reader import *
 from .materials import *
-from .svg import *
 from .scenario import *

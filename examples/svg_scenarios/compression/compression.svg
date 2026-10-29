@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- Subduction setup: oceanic lithosphere (left) - continental margin ramp - non-cratonic continental lithosphere - craton (right).
-     1600 x 400 km, 1 user unit = 1 km, page = model domain (see the 'domain' rectangle for Lx, Lz, dx, dz).
+     1600 x 400 km, 1 user unit = 1 km, page = model domain (see the 'setup' rectangle for Lx, Lz, dx, dz).
      Oceanic lithosphere (x < 797.5 km): crust 7 km + mantle 53 km (60 km below the surface).
      Continental margin ramp (797.5 < x < 897.5 km, 100 km wide):
        - Moho from 47 to 75 km depth below the page top (crust 7 -> 35 km); the continental crustal layers thin proportionally;
@@ -48,7 +48,7 @@
   <g
      inkscape:groupmode="layer"
      id="layer1"
-     inkscape:label="litologias">
+     inkscape:label="lithologies">
     <rect
        id="asthenosphere"
        inkscape:label="asthenosphere"
@@ -285,20 +285,20 @@ V = 25.0e-6</desc>
   </g>
   <g
      inkscape:groupmode="layer"
-     id="layer_domain"
-     inkscape:label="dominio">
+     id="layer_setup"
+     inkscape:label="domain">
     <rect
-       id="domain"
-       inkscape:label="domain"
+       id="setup"
+       inkscape:label="setup"
        x="0"
        y="0"
        width="1600"
        height="400"
        style="fill:none;stroke:#ff0000;stroke-width:1">
       <title
-         id="title_domain">Model domain</title>
+         id="title_setup">Model setup</title>
       <desc
-         id="desc_domain">Lx = 1600 km
+         id="desc_setup">Lx = 1600 km
 Lz = 400 km
 dx = 2 km
 dz = 2 km

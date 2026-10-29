@@ -28,8 +28,7 @@ def test_get_rheology_unknown_name():
 def test_lithological_unit_defaults_and_flow_law():
     unit = LithologicalUnit("test", A=1.0e-20, n=3.0, Q=400e3, V=10e-6)
     assert unit.params["k"] == tp.DEFAULT_MATERIAL["k"]
-    assert (unit.pre_exponential_constant, unit.power_law_exponent, unit.activation_energy,
-            unit.activation_volume) == (1.0e-20, 3.0, 400e3, 10e-6)
+    assert [unit.params[key] for key in "AnQV"] == [1.0e-20, 3.0, 400e3, 10e-6]
 
 
 def test_lithological_unit_rejects_unknown_parameters():
@@ -38,12 +37,23 @@ def test_lithological_unit_rejects_unknown_parameters():
 
 
 def test_mandyoc_layer_material_overrides_the_rheology():
-    layer = MandyocLayer("crust", "wet quartz", density=2750.0, effective_viscosity_scale_factor=2.0,
-                         radiogenic_heat_production=1.0e-10, Nx=5)
-    layer.cohesion_max = 30e6  # e.g. given in the SVG description
+    layer = MandyocLayer("crust", "wet quartz", Nx=5, rho=2750.0, C=2.0, H=1.0e-10, cohesion_max=30e6)
     params = layer.material()
+    assert layer.given == {"rho": 2750.0, "C": 2.0, "H": 1.0e-10, "cohesion_max": 30e6}
     assert set(params) == set(tp.DEFAULT_MATERIAL)
     assert (params["rho"], params["C"], params["H"], params["cohesion_max"]) == (2750.0, 2.0, 1.0e-10, 30e6)
     assert params["A"] == materials.WET_QUARTZ.params["A"]
     assert params["friction_angle_min"] == materials.WET_QUARTZ.params["friction_angle_min"]
     np.testing.assert_array_equal(layer.interface, np.zeros(5))
+
+
+def test_mandyoc_layer_rejects_unknown_parameters():
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        MandyocLayer("crust", "wet quartz", Nx=5, density=2750.0)  # descriptions accept the long names, layers do not
+
+
+def test_mandyoc_layer_drawing_attributes():
+    layer = MandyocLayer("crust", "wet quartz", Nx=5, title="Upper crust", color="#e49c7c", reference_thickness=25e3,
+                         rho=2700.0)
+    assert (layer.title, layer.color, layer.reference_thickness) == ("Upper crust", "#e49c7c", 25e3)
+    assert MandyocLayer("crust", "wet quartz", Nx=5, rho=2700.0).title == "crust"  # default: the label

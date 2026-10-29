@@ -36,8 +36,7 @@ def test_builder_grid(builder):
     assert builder.z[0] == -Lz and builder.z[-1] == 0 and len(builder.z) == Nz
 
 
-def test_builder_creates_its_folder_only_on_export(builder):
-    assert not os.path.exists(builder.path)
+def test_export_interfaces_writes_in_the_builder_folder(builder):
     builder.export_interfaces(export="none")
     assert os.path.isfile(os.path.join(builder.path, "interfaces.txt"))
 
@@ -104,12 +103,36 @@ def test_velocity_builder_conserves_the_flux(builder):
     assert float(abs(vx.isel(x=slice(1, -1), z=slice(1, -1))).max()) == 0  # only the boundaries
 
 
-def test_velocity_builder_profiles(builder):
-    profile = np.linspace(-1e-10, 1e-10, Nz)
+@pytest.mark.parametrize("regime, moving_boundary", [("extension", "right"), ("extension", "left"),
+                                                     ("extension", "symmetric"), ("compression", "right"),
+                                                     ("compression", "left")])
+def test_kinematic_regimes_conserve_the_flux(builder, regime, moving_boundary):
     with quiet():
-        v = VelocityFieldBuilder(builder, units="m/s").set_profile("left", vx=profile)
-        builder.create_velocity_field(v)
-    np.testing.assert_array_equal(builder.DTree.fields.vx.isel(x=0).values, profile)
+        v = VelocityFieldBuilder(builder, units="cm/y")
+        v.set_kinematic_regime(regime, 1.0, moving_boundary=moving_boundary, h_const=140e3)
+        assert abs(v.integrate_normal_components()) < 1e-15
+    left, right = v.velocs["left"].vx, v.velocs["right"].vx
+    one = 0.01 / tp.SEC_PER_YEAR  # 1 cm/yr
+    lithosphere = dict(z=-100e3)  # constant velocity (surface at -40 km, h_const = 140 km)
+    air = dict(z=0.0)  # more than air_gap (10 km) above the surface: no velocity
+    assert float(left.sel(**air)) == 0 and float(right.sel(**air)) == 0
+    if moving_boundary == "symmetric":
+        np.testing.assert_allclose(right.values, -left.values)
+        assert float(right.sel(**lithosphere)) == pytest.approx(one / 2)
+    elif regime == "extension":
+        moving = right if moving_boundary == "right" else left
+        sign = 1 if moving_boundary == "right" else -1
+        assert float(moving.sel(**lithosphere)) == pytest.approx(sign * one)  # outwards
+    else:
+        moving, fixed = (right, left) if moving_boundary == "right" else (left, right)
+        sign = -1 if moving_boundary == "right" else 1
+        assert float(moving.sel(**lithosphere)) == pytest.approx(sign * one)  # inwards
+        assert np.all(fixed.values == 0)
+
+
+def test_symmetric_compression_is_an_error(builder):
+    with quiet(), pytest.raises(ValueError, match="symmetric"):
+        VelocityFieldBuilder(builder).set_kinematic_regime("compression", 1.0, moving_boundary="symmetric")
 
 
 def test_linear_velocity(builder):
@@ -121,34 +144,57 @@ def test_linear_velocity(builder):
 
 # TemperatureFieldBuilder ##########################################################
 
-def _basic_temperature(builder):
-    t = TemperatureFieldBuilder(builder)
-    t.apply_basic_temperature(lithosphere_thickness=120e3, t_pot=1350.0)
+ADIABAT = lambda depth, t_pot=1350.0: t_pot / np.exp(-10.0 * 3.28e-5 * depth / 1250.0)  # depth below the surface
+
+
+def _basic_temperature(builder, t_pot=1350.0):
+    """LAB: top of the asthenosphere (ID 0); surface: top of the crust (ID 2, the default)."""
+    t = TemperatureFieldBuilder(builder, LAB_interface=0)
+    t.apply_linear_temperature(t_pot=t_pot)
     return t
 
 
-def test_basic_temperature(builder):
+def test_temperature_builder_lithosphere(builder):
+    t = TemperatureFieldBuilder(builder, LAB_interface=0)
+    np.testing.assert_array_equal(t.surface_interface.values, -40e3)
+    np.testing.assert_array_equal(t.lithosphere_thickness.values, np.where(builder.x < Lx / 2, 120e3, 80e3))
+
+
+def test_linear_temperature(builder):
     T = _basic_temperature(builder).temperature
     assert float(T.min()) == 0.0
-    assert float(T.sel(z=0)[0]) == 0.0  # top of the sticky air
-    assert float(T.max()) < 1600.0
+    assert float(T.sel(z=0).max()) == 0.0  # sticky air
+    deep = T.sel(z=-250e3)  # asthenosphere: adiabat
+    np.testing.assert_allclose(deep.values, ADIABAT(210e3))
 
 
-def test_conductive_columns_follow_the_lithosphere(builder):
-    t = TemperatureFieldBuilder(builder)
-    with quiet():
-        t.solve_conductive_columns(np.where(builder.x < Lx / 2, 120e3, 80e3), time_max=20e6, t_pot=1400.0)
-    T = t.temperature.sel(z=-100e3)  # 60 km below the surface
-    assert float(T.isel(x=-1)) > float(T.isel(x=0))
+def test_steady_columns_follow_the_lithosphere(builder):
+    t = _basic_temperature(builder).solve_heat_1D()
+    T = t.temperature
+    np.testing.assert_allclose(T.sel(z=-40e3).values, 0.0, atol=1e-9)  # surface
+    assert float(T.sel(z=-100e3).isel(x=-1)) > float(T.sel(z=-100e3).isel(x=0))  # thinner lithosphere is hotter
     builder.create_temperature_field(t)
-    assert builder.DTree.fields.temperature.attrs["t_potential"] == 1400.0
+    assert builder.DTree.fields.temperature.attrs["t_potential"] == 1350.0
 
 
-def test_heat_diffusion_1D(builder):
+def test_steady_2D_conducts_sideways(builder):
+    T1 = _basic_temperature(builder).solve_heat_1D().temperature
+    T2 = _basic_temperature(builder)
+    T2.solve_heat_2D()
+    T2 = T2.temperature
+    np.testing.assert_allclose(T2.sel(z=-250e3).values, ADIABAT(210e3))  # asthenosphere kept
+    np.testing.assert_allclose(T2.sel(z=0).values, 0.0)  # sticky air kept
+    # far from the step of the LAB both solutions agree; at the step the cold side is heated
+    far = T2.sel(z=-100e3).isel(x=0)
+    assert float(far) == pytest.approx(float(T1.sel(z=-100e3).isel(x=0)), abs=1.0)
+    near = dict(z=-100e3, x=Lx / 2 - 2e4)
+    assert float(T2.sel(**near)) > float(T1.sel(**near)) + 10.0
+
+
+def test_solve_heat_column_propagates_one_column(builder):
     t = _basic_temperature(builder)
-    with quiet():
-        t.solve_heat_diffusion1D(time_max=1e6, dt_years=1e4, x_inx=0)
-    assert np.isfinite(t.temperature.values).all()
+    t.solve_heat_column(x_inx=0)
+    np.testing.assert_array_equal(t.temperature.isel(x=0).values, t.temperature.isel(x=-1).values)
 
 
 def test_yield_strength_envelope(builder):

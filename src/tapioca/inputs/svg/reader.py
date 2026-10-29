@@ -1,6 +1,12 @@
 '''
 Build a Mandyoc interfaces.txt from an SVG drawing (e.g. made in Inkscape).
 
+Format: SVG 1.1 files saved by Inkscape (tested with Inkscape 1.4, see SVG_VERSION and INKSCAPE_VERSION). The
+labels, titles and descriptions of the shapes are the Inkscape object properties (inkscape:label, <title> and
+<desc>), and the shapes are read with svgelements, so curves, transforms and groups are supported. SVGScenario
+and tapioca-svg-interfaces warn when a file declares another SVG version or was saved by another version of
+Inkscape (svg_versions), since a change in the format could change how the drawing is read.
+
 Each filled shape is a body of rock described by its object properties
 (Inkscape: Object > Object Properties):
 
@@ -19,8 +25,9 @@ Each filled shape is a body of rock described by its object properties
                  Keys: C, rho, H (required), and A, n, Q, V, k, weakening_seed,
                  cohesion_min, cohesion_max, friction_angle_min and
                  friction_angle_max (optional, they override the values of the
-                 rheology in DEFAULT_MATERIALS). Long names such as
-                 density or radiogenic_heat_production are also accepted.
+                 rheology in DEFAULT_MATERIALS). The names of
+                 tapioca.INTERFACES_PARAMETERS (e.g. density, scale_factor,
+                 radiogenic_heat) are also accepted.
 
                  Optional: h = 120 km (or h = 120e3 m), the reference
                  thickness of the unit, so the drawing does not need to be in
@@ -53,14 +60,13 @@ description gives the dimensions and the resolution of the Mandyoc grid:
                      min_thickness = 1 km   (optional, see remove_slivers; 0 km keeps the slivers)
 
 It may also give the settings of the numerical experiment, which are returned
-as text in domain["experiment"] and read by the
+as text in setup["experiment"] and read by the
 scenario builder (tapioca.inputs.svg.SVGScenario): regime (rifting, compression, accordion, quiescence), velocity
 (e.g. 1 cm/yr), moving_boundary (left, right or symmetric), time_max (e.g. 100 Myr),
-quiescence_time (e.g. 300 Myr), magmatism (on or off), magmatism_extraction (on or off)
+quiescence_time (e.g. 0 Myr), magmatism (on or off), magmatism_extraction (on or off)
 magmatism_Ts0 (e.g. 1080, in oC) and preset_initial_temperature (folder or .nc file of a
 preliminary scenario whose final thermal state is used as initial temperature).
 
-Older SVGs with the shape labelled "domain" are still read (with a warning).
 Without a setup shape the SVG page is the domain and Lx, Lz, Nx must be given.
 x and z are scaled independently, so the drawing may be vertically
 exaggerated. Shapes are painted in document order (later shapes cover earlier
@@ -85,10 +91,10 @@ Usage
 
 or, from another script:
 
-    from tapioca.inputs.svg import read_domain, layers_from_svg
-    domain = read_domain("scenario.svg")
-    layers = layers_from_svg("scenario.svg", domain["Lx"], domain["Lz"], domain["Nx"])
-    builder = layers_to_builder(layers, domain["Lx"], domain["Lz"], Nz=domain["Nz"])  # tapioca.inputs.MandyocBuilder
+    from tapioca.inputs.svg import read_setup, layers_from_svg
+    setup = read_setup("scenario.svg")
+    layers = layers_from_svg("scenario.svg", setup["Lx"], setup["Lz"], setup["Nx"])
+    builder = layers_to_builder(layers, setup["Lx"], setup["Lz"], Nz=setup["Nz"])  # tapioca.inputs.MandyocBuilder
 
 Requires: numpy, matplotlib, svgelements (pip install svgelements)
 '''
@@ -110,45 +116,39 @@ from matplotlib.path import Path as MplPath
 from matplotlib.patches import Patch
 import svgelements as se
 
-from ..._variables import DEFAULT_MATERIAL
+from ..._variables import DEFAULT_MATERIAL, INTERFACES_PARAMETERS, UNITS
+from ..._aux_functions import split_unit
 from ..generic_input_classes import MandyocBuilder
+from ..checks import SVGInputError, SVGChecks
 from .materials import MandyocLayer, get_rheology
 
-__all__ = ["SVGInputError", "read_domain", "read_units", "layers_from_svg", "layers_to_builder", "write_interfaces",
+__all__ = ["SVGInputError", "SVG_VERSION", "INKSCAPE_VERSION", "svg_versions", "read_setup", "read_units", "layers_from_svg", "layers_to_builder", "write_interfaces",
+           "layer_indices", "slot_thickness", "layer_thickness",
            "plot_layers", "points_from_spacing", "EXPERIMENT_KEYS", "SETUP_LABEL"]
 
 
-class SVGInputError(ValueError):
-    '''Error in the SVG file or in the settings of the scenario'''
-
 SVG_NS = "{http://www.w3.org/2000/svg}"
-INKSCAPE_LABEL = "{http://www.inkscape.org/namespaces/inkscape}label"
+INKSCAPE_NS = "{http://www.inkscape.org/namespaces/inkscape}"
+INKSCAPE_LABEL = INKSCAPE_NS + "label"
 SHAPE_TAGS = {"rect", "path", "circle", "ellipse", "polygon", "polyline"}
+SVG_VERSION = "1.1"  # version of the SVG format read by tapioca
+INKSCAPE_VERSION = "1.4"  # version of Inkscape (major.minor) used to draw and test the SVG scenarios
 SETUP_LABEL = "setup"  # label (or id) of the shape that gives the model domain, the resolution and the experiment
-LEGACY_SETUP_LABEL = "domain"  # label of the setup shape in older SVGs, still read with a warning
 MIN_THICKNESS = 1.0e3  # default min_thickness [m]: thinner pieces of units drawn thicker elsewhere are removed (see remove_slivers)
 EXPERIMENT_KEYS = ("regime", "velocity", "moving_boundary", "time_max", "quiescence_time",
-                   "magmatism", "magmatism_extraction", "magmatism_Ts0", "preset_initial_temperature")  # settings of the experiment in the domain description
+                   "magmatism", "magmatism_extraction", "magmatism_Ts0", "preset_initial_temperature",
+                   "temperature_solver", "water_layer", "magmatic_layer")  # settings of the experiment in the domain description
 
-## There is this same variable in aux_variables, with more properties.
-# key in the description -> attribute of MandyocLayer
-PROPERTY_KEYS = {
-    "C": "effective_viscosity_scale_factor",
-    "rho": "density",
-    "H": "radiogenic_heat_production",
-    "A": "pre_exponential_constant",
-    "n": "power_law_exponent",
-    "Q": "activation_energy",
-    "V": "activation_volume",
-}
-PROPERTY_KEYS.update({attr: attr for attr in list(PROPERTY_KEYS.values())})
-PROPERTY_KEYS.update({key: key for key in DEFAULT_MATERIAL if key not in PROPERTY_KEYS})  # k, cohesion_min, ...
+# key in the description -> parameter of interfaces.txt: the keys of DEFAULT_MATERIAL (rho, C, H, ...) and their
+# names in INTERFACES_PARAMETERS (density, scale_factor, radiogenic_heat, ...)
+PROPERTY_KEYS = {**{key: key for key in DEFAULT_MATERIAL}, **{name: key for key, name in INTERFACES_PARAMETERS.items()}}
 
 ###############################################################################
 # Functions
 ###############################################################################
 
-## What is this???
+# Arithmetic operators accepted in the values of the descriptions (e.g. H = 1.67e-6 / 2700.0). eval_number evaluates
+# the syntax tree of the value with them, never with eval(), so a description can not run code.
 _OPERATORS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
               ast.Div: operator.truediv, ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos}
 
@@ -166,22 +166,30 @@ def eval_number(expr):
         raise ValueError(f"invalid number: {expr!r}")
     return _eval(ast.parse(expr.strip(), mode="eval"))
 
-## an idea is to create a dictionary with factors and call it to convert the units. it's avoid the many ifs:
-## something like: {km:1e3, m:1, cm:100}
-## the samething can be applied to areas (km2, m2, cm2, mm2, etc) 
+def parse_quantity(value, quantity, where, name, default_unit=None, positive=False):
+    '''
+    Read a number with a unit of tapioca.UNITS[quantity] (e.g. "120 km", "1 cm/yr", "300 Myr") and return it
+    in the base unit of the quantity (m, yr, cm/yr or oC). The number may be an expression (see eval_number).
+    Without unit, default_unit is used; if it is None, the unit is required.
+    '''
+    units = UNITS[quantity]
+    number, factor = split_unit(value, quantity)
+    if factor is None:
+        if default_unit is None:
+            raise SVGInputError(f"{where}: give the unit of {name} ({' or '.join(units)}), e.g. {name} = 1 {next(iter(units))}")
+        factor = units[default_unit]
+    try:
+        result = eval_number(number) * factor
+    except (ValueError, SyntaxError):
+        raise SVGInputError(f"{where}: could not read the value of {name} = {value}. Units: {', '.join(units)}")
+    if positive and result <= 0:
+        raise SVGInputError(f"{where}: {name} must be positive.")
+    return result
+
+
 def parse_thickness(value, where, name="h"):
     '''Read a length such as "120 km" or "120e3 m" and return it in m.'''
-    match = re.fullmatch(r"(.+?)\s*(km|m)", value.strip())
-    if match is None:
-        raise SVGInputError(f"{where}: give the unit of {name} (km or m), e.g. {name} = 120 km")
-    try:
-        number = eval_number(match.group(1))
-    except (ValueError, SyntaxError):
-        raise SVGInputError(f"{where}: could not read the value of {name} = {value}")
-    thickness = number * (1.0e3 if match.group(2) == "km" else 1.0)
-    if thickness <= 0:
-        raise SVGInputError(f"{where}: {name} must be positive.")
-    return thickness
+    return parse_quantity(value, "length", where, name, positive=True)
 
 
 def points_from_spacing(length, spacing, name):
@@ -191,17 +199,24 @@ def points_from_spacing(length, spacing, name):
         raise SVGInputError(f"{name} = {spacing / 1e3:g} km does not divide the domain ({length / 1e3:g} km).")
     return int(round(intervals)) + 1
 
-## what "older SVGs"? We should create a default pattern (svg 1.1 is the most popular)
-def is_setup_shape(el, label=None):
-    '''True if el is a shape labelled (or with id) label, by default the setup shape of new or older SVGs.'''
-    labels = (label,) if label else (SETUP_LABEL, LEGACY_SETUP_LABEL)
+def is_setup_shape(el, label=SETUP_LABEL):
+    '''True if el is a shape labelled (or with id) label, by default the setup shape.'''
     return (el.tag.replace(SVG_NS, "") in SHAPE_TAGS
-            and any(lb in labels for lb in (el.get(INKSCAPE_LABEL), el.get("id"))))
+            and label in (el.get(INKSCAPE_LABEL), el.get("id")))
 
 ## all this things could be used to create the MandyocBuilder (next implementation: create the abstract class `GeometricDomain`) 
-def read_domain(svg_file):
+def svg_versions(svg_file):
     '''
-    Read the shape labelled "setup" (see the module docstring), or "domain" in older SVGs.
+    Version of the SVG format (attribute version of <svg>) and version of Inkscape that saved the file
+    (inkscape:version, e.g. "1.4.4 (dcaf3e7, 2026-05-05)"), or None when the file does not declare them.
+    '''
+    root = ET.parse(svg_file).getroot()
+    return root.get("version"), root.get(INKSCAPE_NS + "version")
+
+
+def read_setup(svg_file):
+    '''
+    Read the shape labelled "setup" (see the module docstring).
     Return dict(id, Lx, Lz, Nx, Nz, experiment and min_thickness if given) with lengths in m, or None if the
     SVG has no setup shape.
     experiment is a dict with the settings of the numerical experiment given in the description (as text).
@@ -209,12 +224,6 @@ def read_domain(svg_file):
     root = ET.parse(svg_file).getroot()
     label = SETUP_LABEL
     shapes = [el for el in root.iter() if is_setup_shape(el, label)]
-    if not shapes:
-        label = LEGACY_SETUP_LABEL
-        shapes = [el for el in root.iter() if is_setup_shape(el, label)]
-        if shapes:
-            print(f"Warning: the shape labelled '{LEGACY_SETUP_LABEL}' in {svg_file} is read as the setup shape; "
-                  f"rename it to '{SETUP_LABEL}'.")
     if not shapes:
         return None
     if len(shapes) > 1:
@@ -252,25 +261,25 @@ def read_domain(svg_file):
     for key in ("Lx", "Lz"):
         if key not in values:
             raise SVGInputError(f"{where}: missing {key} in the description.")
-    domain = dict(id=el.get("id"), Lx=values["Lx"], Lz=values["Lz"], experiment=experiment)
+    setup = dict(id=el.get("id"), Lx=values["Lx"], Lz=values["Lz"], experiment=experiment)
     if "min_thickness" in values:
-        domain["min_thickness"] = values["min_thickness"]
+        setup["min_thickness"] = values["min_thickness"]
     for d, N, L in (("dx", "Nx", "Lx"), ("dz", "Nz", "Lz")):
         if d in values:
-            domain[N] = points_from_spacing(values[L], values[d], d)
-            if N in values and values[N] != domain[N]:
+            setup[N] = points_from_spacing(values[L], values[d], d)
+            if N in values and values[N] != setup[N]:
                 raise SVGInputError(f"{where}: {d} and {N} do not agree; give only one of them.")
         elif N in values:
-            domain[N] = values[N]
+            setup[N] = values[N]
         else:
             raise SVGInputError(f"{where}: give the resolution {d} (or {N}) in the description.")
-    return domain
+    return setup
 
 ## If MandyocLayer is really redundant, this code have to change
 def parse_description(text, where):
     '''
     Parse the description of a shape into
-    (rheology (LithologicalUnit), {MandyocLayer attribute: value}, reference thickness in m or None).
+    (rheology (LithologicalUnit), {parameter of DEFAULT_MATERIAL: value}, reference thickness in m or None).
     '''
     rheology, props, thickness = None, {}, None
     for line in text.splitlines():
@@ -302,7 +311,7 @@ def parse_description(text, where):
         rheology = get_rheology(rheology)
     except ValueError as err:
         raise SVGInputError(f"{where}: {err}")
-    missing = [s for s in ["C", "rho", "H"] if PROPERTY_KEYS[s] not in props]
+    missing = [s for s in ["C", "rho", "H"] if s not in props]
     if missing:
         raise SVGInputError(f"{where}: missing {', '.join(missing)} in the description.")
     return rheology, props, thickness
@@ -383,7 +392,7 @@ def shape_to_mplpath(shape, n_curve=32):
     return MplPath(np.array(verts), codes)
 
 
-def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id=None):
+def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, setup_id=None):
     '''
     Sample the SVG on a (Nzs, Nx) grid and return the unit index of each point (-1 = empty)
     and the unit it covers (the one that would be there without it, -1 = none).
@@ -392,10 +401,10 @@ def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id=None):
     svg = se.SVG.parse(svg_file, reify=True)
 
     # SVG region mapped to the domain: page, or the bounding box of an element
-    if domain_id:
-        ref = svg.get_element_by_id(domain_id)
+    if setup_id:
+        ref = svg.get_element_by_id(setup_id)
         if ref is None:
-            raise SVGInputError(f"Element with id '{domain_id}' not found in the SVG.")
+            raise SVGInputError(f"Element with id '{setup_id}' not found in the SVG.")
         x0, y0, x1, y1 = ref.bbox(with_stroke=False)
     else:
         x0, y0, x1, y1 = 0.0, 0.0, float(svg.width), float(svg.height)
@@ -436,9 +445,14 @@ def rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id=None):
 
     return x, zdepth, dz, grid, under, colors
 
-## What this function do?
 def scs(a, b):
-    '''Shortest common supersequence of two sequences.'''
+    '''
+    Shortest common supersequence of two sequences: the shortest sequence that contains both, in order.
+    build_stack uses it to find one stack of layers (bottom to top) that fits every column of the drawing:
+    the columns [asthenosphere, mantle, crust, air] and [asthenosphere, mantle, crust, seed, crust, air] give
+    [asthenosphere, mantle, crust, seed, crust, air], and the first column gets zero thickness for the seed and
+    the second crust slot. Mandyoc needs this single stack because each interface is one z(x) over the domain.
+    '''
     m, n = len(a), len(b)
     L = np.zeros((m + 1, n + 1), dtype=int)
     L[m, :] = np.arange(n, -1, -1)
@@ -545,12 +559,15 @@ def remove_slivers(grid, under, dz, Lz, min_thickness, unit_names, verbose=True)
                   f"thinner than min_thickness = {min_thickness / 1e3:g} km): it takes the unit below it.")
     return grid, under
 
-## I think this function can be used to create the interfaces inside the MandyocBuilder.
-## PROBLEM: positive downwards ; Mandyoc is positive upwards
 def build_stack(grid, dz, Lz, unit_names):
     '''
     Return the stack of units (indices, bottom to top) and the base depth of each
     slot, an array (n_layers, Nx) in m (positive downwards).
+
+    Depths are positive downwards on purpose: the sample grid comes from the SVG, whose y axis grows
+    downwards (row 0 of grid is the top of the domain), and the whole reader works in depth. The
+    conversion to the convention of Mandyoc (z positive upwards, from -Lz to 0, row 0 at the base)
+    happens once, in layers_to_builder (z = -depth), which creates the interfaces of MandyocBuilder.
     '''
     Nzs, Nx = grid.shape
     if (grid < 0).any():
@@ -606,10 +623,11 @@ def build_stack(grid, dz, Lz, unit_names):
             base[a + 1:b + 1, ix] = np.clip(drawn[b, near], tops[r], drawn[a, ix])  # inside the run
     return stack, unique, base
 
-## I don't got if the layer is rescaled or the thickness is replaced by h
 def rescale_thickness(stack, base, grid, under, unit_names, units, Lz, dz):
     '''
-    Scale the drawing so that the units with h get that reference thickness.
+    Scale the drawing so that the units with h get that reference thickness. The drawing is rescaled, not
+    replaced: a layer with h is stretched by h / (its most common drawn thickness) in every column, so where it is
+    drawn thinner or thicker it keeps that proportion (e.g. a crust thinned to half keeps half of h).
 
     Each point of the drawing gets a vertical scale factor and, in each column,
     the depth of the interfaces is integrated from the top:
@@ -716,12 +734,12 @@ def rescale_thickness(stack, base, grid, under, unit_names, units, Lz, dz):
 ## I think the `MandyocLayer` is equivalent to the interfaces within `MandyocBuilder`
 ## May this function should return a xr.Dataset to be loaded as the interfaces or
 ## the whole `MandyocBuilder.DTree.interfaces`. A delicated merge is necessary
-def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, min_thickness=None, verbose=True):
+def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, setup_id=None, min_thickness=None, verbose=True):
     '''
     Read the SVG and return the list of MandyocLayer (bottom to top) with their
     interfaces (base depth, m) set. Lx, Lz and dz in m.
-    The region mapped to the domain is the shape labelled "setup" if there is one,
-    the element domain_id if given, or else the page.
+    The region mapped to the setup is the shape labelled "setup" if there is one,
+    the element setup_id if given, or else the page.
 
     Parameters
     ----------
@@ -735,7 +753,7 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, min_thicknes
         Number of horizontal grid points.
     dz : float, optional
         Vertical grid spacing in meters. Default is 100.0.
-    domain_id : str, optional
+    setup_id : str, optional
         ID of the SVG element to use as the domain. If None, the shape labelled "setup" is used if present, otherwise the entire page is used. Default is None.
     min_thickness : float, optional
         Thinner pieces of a unit that is thicker elsewhere are removed, in meters (see remove_slivers;
@@ -743,12 +761,12 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, min_thicknes
     verbose : bool, optional
         If True, print information about the layers and scaling. Default is True.
     '''
-    if domain_id is None or min_thickness is None:
-        domain = read_domain(svg_file)
-        if domain is not None:
-            domain_id = domain_id or domain["id"]
+    if setup_id is None or min_thickness is None:
+        setup = read_setup(svg_file)
+        if setup is not None:
+            setup_id = setup_id or setup["id"]
             if min_thickness is None:
-                min_thickness = domain.get("min_thickness")
+                min_thickness = setup.get("min_thickness")
     if min_thickness is None:
         min_thickness = MIN_THICKNESS
     shape_unit, units = read_units(svg_file)
@@ -756,7 +774,7 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, min_thicknes
         raise SVGInputError("No shape with description found in the SVG.")
     unit_names = list(units)
 
-    x, zdepth, dz, grid, under, colors = rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, domain_id)
+    x, zdepth, dz, grid, under, colors = rasterize(svg_file, shape_unit, unit_names, Lx, Lz, Nx, dz, setup_id)
     grid, under, _ = fill_gaps(grid, under, Lx / (Nx - 1), dz, verbose=verbose)
     grid, under = remove_slivers(grid, under, dz, Lz, min_thickness, unit_names, verbose=verbose)
     stack, unique, base = build_stack(grid, dz, Lz, unit_names)
@@ -772,17 +790,8 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, min_thicknes
     unit_layers = []
     for i, name in enumerate(unit_names):
         u = units[name]
-        props = dict(u["props"])
-        layer = MandyocLayer(name, u["rheology"],
-                             density=props.pop("density"),
-                             effective_viscosity_scale_factor=props.pop("effective_viscosity_scale_factor"),
-                             radiogenic_heat_production=props.pop("radiogenic_heat_production"),
-                             Nx=Nx)
-        for attr, value in props.items():  # A, n, Q, V, k, cohesion_min, ... given in the description
-            setattr(layer, attr, value)
-        layer.title = u["title"] or name
-        layer.color = colors.get(i, "#808080")
-        layer.reference_thickness = u["thickness"]
+        layer = MandyocLayer(name, u["rheology"], Nx=Nx, title=u["title"], color=colors.get(i, "#808080"),
+                             reference_thickness=u["thickness"], **u["props"])
         unit_layers.append(layer)
 
     layers = []
@@ -799,11 +808,25 @@ def layers_from_svg(svg_file, Lx, Lz, Nx, dz=100.0, domain_id=None, min_thicknes
         print("Layers (bottom to top):")
         for k, layer in enumerate(layers):
             print(f"  {k:2d}  {layer.layer_label:25s} {layer.rheology_name:12s} "
-                  f"C={layer.effective_viscosity_scale_factor:g} rho={layer.density:g} H={layer.radiogenic_heat_production:.4g}")
+                  f"C={layer.params['C']:g} rho={layer.params['rho']:g} H={layer.params['H']:.4g}")
         print(f"n_interfaces = {len(layers) - 1}   # put this in param.txt")
         print(f"Sampling: dx = {x[1] - x[0]:.1f} m, dz = {dz:.1f} m; mismatched samples of the drawing after rebuild: {mismatch}")
 
     return layers
+
+
+def layer_indices(layers, label):
+    '''Return the indices (position in the stack) of the layers with the given label.'''
+    return [i for i, layer in enumerate(layers) if layer.layer_label == label]
+
+def slot_thickness(layers, i, ix):
+    '''Thickness [m] of the i-th layer of the stack at column(s) ix.'''
+    top = layers[i+1].interface[ix] if i < len(layers)-1 else 0.0
+    return layers[i].interface[ix] - top
+
+def layer_thickness(layers, label, ix):
+    '''Total thickness [m] of the layers with the given label at column(s) ix.'''
+    return sum(slot_thickness(layers, i, ix) for i in layer_indices(layers, label))
 
 
 def layers_to_builder(layers, Lx, Lz, Nz=2, path=".", seed_label="weak_seed", verbose=False):
@@ -816,24 +839,31 @@ def layers_to_builder(layers, Lx, Lz, Nz=2, path=".", seed_label="weak_seed", ve
     weakening_seed is given in their description.
     '''
     builder = MandyocBuilder(path, Nx=len(layers[0].interface), Nz=Nz, Lx=Lx, Lz=Lz, verbose=verbose)
-    ## this functions is getting the dictionary inside layer, editing just one key and
-    ## returning the dictionary. Also, a function inside a function is not a good practice
-    ## I think the "weakning_seed" must be a parameter that the user should set in the .svg, and
-    ## be a interpreted parameter from the name of the layer. 
-    def material(layer):
-        params = layer.material()
-        if layer.layer_label == seed_label and not hasattr(layer, "weakening_seed"):
-            params["weakening_seed"] = 1.0
-        return params
-
-    builder.create_interface(-1, 0.0, interface_name=f"{len(layers)-1:02d}_{layers[-1].layer_label}", **material(layers[-1]))
+    builder.create_interface(-1, 0.0, interface_name=f"{len(layers)-1:02d}_{layers[-1].layer_label}",
+                             **layer_material(layers[-1], seed_label))
     for i, layer in enumerate(layers[:-1]):
-        builder.create_interface(i, -1.0 * layers[i+1].interface, interface_name=f"{i:02d}_{layer.layer_label}", **material(layer))
+        builder.create_interface(i, -1.0 * layers[i+1].interface, interface_name=f"{i:02d}_{layer.layer_label}",
+                                 **layer_material(layer, seed_label))
     return builder
 
-## Why is there a function to export calling the builder export?
+
+def layer_material(layer, seed_label="weak_seed"):
+    '''
+    Parameters of the interface of a layer (MandyocLayer.material). weakening_seed is a parameter of the
+    description like the others; when it is not given, the layers labelled seed_label get 1 (initial strain).
+    '''
+    params = layer.material()
+    if layer.layer_label == seed_label and "weakening_seed" not in layer.given:
+        params["weakening_seed"] = 1.0
+    return params
+
+
 def write_interfaces(layers, Lx, Lz, fname="interfaces.txt"):
-    '''Write the interfaces.txt of Mandyoc (parameters of the layers and the interfaces, bottom to top) with MandyocBuilder.'''
+    '''
+    Write the interfaces.txt of Mandyoc (parameters of the layers and the interfaces, bottom to top) with
+    MandyocBuilder, to any file name: used by tapioca-svg-interfaces, which writes only the interfaces, without
+    a scenario (MandyocBuilder.export_interfaces always writes <path>/interfaces.txt).
+    '''
     with tempfile.TemporaryDirectory() as folder:  # export_interfaces always writes <path>/interfaces.txt
         layers_to_builder(layers, Lx, Lz, path=folder).export_interfaces(export="none")
         shutil.move(os.path.join(folder, "interfaces.txt"), os.path.abspath(fname))
@@ -855,8 +885,8 @@ def plot_layers(layers, Lx, Lz, fname):
     for layer in layers[::-1]:
         unique.setdefault(layer.layer_label, layer)
     handles = [Patch(facecolor=layer.color, edgecolor="k",
-                     label=f"{layer.title}\n{layer.effective_viscosity_scale_factor:g} x {layer.rheology_name.replace('_', ' ')}\n"
-                           fr"$\rho$ = {layer.density:g} kg/m³")
+                     label=f"{layer.title}\n{layer.params['C']:g} x {layer.rheology_name.replace('_', ' ')}\n"
+                           fr"$\rho$ = {layer.params['rho']:g} kg/m³")
                for layer in unique.values()]
     fig.subplots_adjust(bottom=0.28)
     ax.legend(handles=handles, ncol=len(handles), loc="lower center", bbox_to_anchor=(0.5, -0.42),
@@ -887,26 +917,27 @@ def _main():
     parser.add_argument("--sampling", type=float, default=0.1, help="vertical sampling to locate the interfaces [km] (default 0.1)")
     parser.add_argument("--min-thickness", type=float, help="remove thinner pieces [km] of units drawn thicker elsewhere, "
                         "left by overlapping shapes; 0 keeps them (default: from the setup shape, or 1 km)")
-    parser.add_argument("--domain-id", help="id of an element whose bounding box is the domain (default: the shape labelled 'setup', or the page)")
+    parser.add_argument("--setup-id", help="id of an element whose bounding box is the domain (default: the shape labelled 'setup', or the page)")
     parser.add_argument("-o", "--output", default="interfaces.txt")
     parser.add_argument("--plot", help="save a figure of the resulting layers (e.g. numerical_setup.png)")
     args = parser.parse_args()
 
-    domain = read_domain(args.svg) or {}
-    Lx = args.Lx * 1.0e3 if args.Lx else domain.get("Lx")
-    Lz = args.Lz * 1.0e3 if args.Lz else domain.get("Lz")
+    SVGChecks()._check_svg_versions(args.svg, *svg_versions(args.svg), SVG_VERSION, INKSCAPE_VERSION)
+    setup = read_setup(args.svg) or {}
+    Lx = args.Lx * 1.0e3 if args.Lx else setup.get("Lx")
+    Lz = args.Lz * 1.0e3 if args.Lz else setup.get("Lz")
     if Lx is None or Lz is None:
         raise SVGInputError(f"No shape labelled '{SETUP_LABEL}' in the SVG: give --Lx and --Lz (and --dx or --Nx).")
     if args.dx:
         Nx = points_from_spacing(Lx, args.dx * 1.0e3, "dx")
     else:
-        Nx = args.Nx or domain.get("Nx")
+        Nx = args.Nx or setup.get("Nx")
     if Nx is None:
         raise SVGInputError("Give the horizontal resolution with --dx or --Nx.")
     print(f"Domain: Lx = {Lx / 1e3:g} km, Lz = {Lz / 1e3:g} km, Nx = {Nx}")
 
     min_thickness = args.min_thickness * 1.0e3 if args.min_thickness is not None else None
-    layers = layers_from_svg(args.svg, Lx, Lz, Nx, dz=args.sampling * 1.0e3, domain_id=args.domain_id, min_thickness=min_thickness)
+    layers = layers_from_svg(args.svg, Lx, Lz, Nx, dz=args.sampling * 1.0e3, setup_id=args.setup_id, min_thickness=min_thickness)
     write_interfaces(layers, Lx, Lz, args.output)
     print(f"Wrote {args.output}")
 
