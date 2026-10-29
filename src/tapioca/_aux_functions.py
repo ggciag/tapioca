@@ -13,11 +13,8 @@ from pathlib import Path
 from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARAMS_TYPES
 
 __all__ = ["read_params","evaluate_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
-           "_numba_diffusion_loop","build_diagonals_2D",
+           "_numba_diffusion_loop","build_diagonals_2D","spsolve_heat_col",
            "_Druker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
-
-# Old functions, mostly made to handle the old format of data management
-# Could be useful for people using older versions of Mandyoc
 
 def read_params(path_param:str)->dict:
     '''

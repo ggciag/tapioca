@@ -18,7 +18,55 @@ from .._aux_functions import read_params, evaluate_params, ensure_directory_exis
 
 __all__ = ['MandyocBuilder','TemperatureFieldBuilder','VelocityFieldBuilder']
 
-class MandyocBuilder:
+class GeometryDomain:
+    """Abstract class to handle with the domain and grid discretization."""
+    def __init__(self, Nx: int, Nz: int, Lx: float, Lz: float, Ny: int = 0, Ly: float = 0.0):
+        self.Nx = Nx
+        self.Nz = Nz
+        self.Lx = Lx
+        self.Lz = -abs(Lz)  # z is positive upwards
+        self.Ny = Ny
+        self.Ly = Ly
+        self.dimensions = 3 if (Ny > 0 and abs(Ly) > 0) else 2
+        
+        self._initialize_grid()
+
+    def _initialize_grid(self):
+        """Generates the 1D coordinate arrays and grid spacings."""
+        self.x = np.linspace(0, self.Lx, self.Nx)
+        self.dx = self.x[1] - self.x[0]
+        
+        self.z = np.linspace(self.Lz, 0, self.Nz)
+        self.dz = self.z[0] - self.z[1]
+        
+        if self.dimensions == 3:
+            self.y = np.linspace(0, self.Ly, self.Ny)
+            self.dy = self.y[1] - self.y[0]
+        else:
+            self.y = self.dy = None
+
+class VerboseExtension:
+    """Adds standardized logging capabilities."""
+    verbose: bool = True  # it can be overridden by child class
+
+    def _print_verbose(self, message: str, ending: str = "\n"):
+        '''
+        Parameters
+        ----------
+        message : str
+            The printed message
+
+        ending : str
+            The end of the string text.
+            Default is `\n`.
+        '''
+        if getattr(self, 'verbose', False):
+            print(message, end=ending)
+
+## A class like a "AbstractFieldBuilder" is useful to pass the MandyocBuilder attributes
+## this abstract class may have a build_class to create xr.dataarray
+
+class MandyocBuilder(GeometryDomain,VerboseExtension):
 
     def __init__(self, path:str, Nx:int, Nz:int, Lx:float, Lz:float, 
             Ny:int=0, Ly:float=0.0, thick_air:float=40e3, 
@@ -112,24 +160,12 @@ class MandyocBuilder:
             the final material properties (e.g., density, radiogenic heat) in the discrete
             numerical nodes. It can also contain the input variables (vx, vz, temperature).
             """
-        
+        super().__init__(Nx, Nz, Lx, Lz, Ny, Ly) ## initiate the attribute using the abstract class
+
         self.path = path
         self.verbose = verbose
         self.thick_air = thick_air
         ensure_directory_exists(self.path)
-
-        self.Nx = Nx
-        self.Nz = Nz
-        self.Lx = Lx
-        self.Lz = -Lz
-        self.Ly = self.Ny = self.y = None
-        self.dimensions = 2
-
-        self.x = np.linspace(0, self.Lx, self.Nx)
-        self.z = np.linspace(self.Lz, 0, self.Nz)
-
-        self.dx = self.x[1] - self.x[0]
-        self.dz = self.z[0] - self.z[1]
 
         # Creating the DataTree structure to store the model layers
         self.DTree = DataTree.from_dict( {"fields":
@@ -146,13 +182,7 @@ class MandyocBuilder:
         self.DTree['/interfaces'].attrs["description"] = "This group contains the interfaces of the model, each interface is a DataArray with the depth and the material properties as attributes."
         
         # setting the model dimensions
-        if Ny>0 and abs(Ly)>0:
-            self.Ly = Ly
-            self.Ny = Ny
-            self.dimensions = 3
-            self.y = np.linspace(0, self.Ly, self.Ny)
-            self.dy = self.y[1] - self.y[0]
-
+        if self.Ny>0 and abs(self.Ly)>0:
             self.DTree = DataTree.from_dict( {"fields":
                                 xr.Dataset(coords={'x': self.x, 'y': self.y, 'z': self.z}), 
                                         "interfaces":xr.Dataset(coords={'x': self.x, 'y': self.y})})
@@ -163,23 +193,6 @@ class MandyocBuilder:
             self.DTree['/fields']["y"].attrs["units"] = "m"
             self.DTree['/fields']["y"].attrs["axis"] = "Y"
             self.DTree['/interfaces']["y"].attrs["units"] = "m"
-            
-    def _print_verbose(self, message:str, ending ="\n"):
-        '''
-        Internal method to print a message if verbose is True
-
-        Parameters
-        ----------
-        message : str
-            The printed message
-
-        ending : str
-            The end of the string text.
-            Default is `\n`.
-        '''
-        if self.verbose:
-            print(message,end=ending)
-        return None
 
     def create_interface(self, id_layer:int, position:float|np.ndarray, interface_name:str=None, **material):
         '''
