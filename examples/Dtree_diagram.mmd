@@ -1,0 +1,74 @@
+---
+config:
+  htmlLabels: true
+  markdownAutoWrap: true
+  flowchart:
+    htmlLabels: true
+    wrappingWidth: 260
+---
+graph TB
+    _["`/`"]
+    _mesh["`mesh`"]
+    _ --> _mesh
+    _mesh_original["`**original**
+
+- density ['time', 'z', 'x']
+- temperature ['time', 'z', 'x']
+- pressure ['time', 'z', 'x']
+- viscosity ['time', 'z', 'x']
+- vx ['time', 'z', 'x']
+- vz ['time', 'z', 'x']
+- strain ['time', 'z', 'x']
+- tau_xx ['time', 'z', 'x']
+- tau_zz ['time', 'z', 'x']
+- tau_xz ['time', 'z', 'x']
+- tau_J2 ['time', 'z', 'x']`"]
+    _mesh --> _mesh_original
+    _mesh_upscaled["`**upscaled**
+
+
+- lithology ['time', 'z', 'x']`"]
+    _mesh --> _mesh_upscaled
+    _surface["`surface`"]
+    _ --> _surface
+    _surface_topography["`**topography**
+
+
+- surface ['time', 'x']`"]
+    _surface --> _surface_topography
+    _particles["`particles`"]
+    _ --> _particles
+    _particles_original["`**original**
+
+
+- lithology ['time', 'id']`"]
+    _particles --> _particles_original
+    _particles_crust["`**crust**
+
+
+- lithology ['time', 'id']`"]
+    _particles --> _particles_crust
+    _particles_lower_crust["`**lower_crust**
+
+
+- lithology ['time', 'id']`"]
+    _particles --> _particles_lower_crust
+    _particles_central["`**central**
+
+
+- lithology ['time', 'id']
+- temperature ['time', 'id']
+- pressure ['time', 'id']
+- vx ['time', 'id']
+- vz ['time', 'id']`"]
+    _particles --> _particles_central
+    _particles_crustal_classified["`**crustal_classified**
+
+
+- lithology ['time', 'id']
+- temperature ['time', 'id']
+- pressure ['time', 'id']
+- vx ['time', 'id']
+- vz ['time', 'id']
+- domain ['id']`"]
+    _particles --> _particles_crustal_classified
