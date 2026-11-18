@@ -534,9 +534,24 @@ class MandyocScen:
 
     def _eval_particles_selection(self,source_name:str, target_name:str, 
                                   get_selection:bool=False):
-        '''
-        [Ongoing]: Evaluate the selection names and paths  -for particles
-        '''
+        """
+        Internal method that evaluates and validates particle node paths and names for selection operations.
+
+        Parameters
+        ----------
+        source_name : str
+            The input node name.
+        target_name : str
+            The desired output node name.
+        get_selection : bool, optional
+            If True, returns the dataset object alongside paths and names.
+
+        Returns
+        -------
+        tuple
+            (paths, names, dataset) or (paths, names) where paths and names are tuples 
+            of (source, target).
+        """
 
         if len(target_name) == 0:
             target_name = 'selected'
@@ -555,10 +570,26 @@ class MandyocScen:
     #Selecting particles
     def selectParticles_bytimerange(self, timerange:list, 
                     source_name:str='', target_name:str=''):
-        '''
-        select particles that appeared (e.g. sedimented) within the specified time range
-        timerange : array-like = [tmin, tmax]
-        '''
+        """
+        Selects particles that entered the domain (i.e., appeared) between two timesteps.
+
+        This identifies particles present at `timerange[1]` that were not present 
+        at `timerange[0]` to create a selection.
+
+        Parameters
+        ----------
+        timerange : list of float
+            Time range [t_start, t_end] in Myr.
+        source_name : str, optional
+            Node name in `'/particles/'` to filter from.
+        target_name : str, optional
+            Node name in `'/particles/'` where the selection will be saved.
+
+        Returns
+        -------
+        MandyocScen
+            Returns the class instance for method chaining.
+        """
         # apply the support selection function
         paths, names,pts = self._eval_particles_selection(source_name=source_name,target_name=target_name,get_selection=True)
         source_path, target_path = paths
@@ -586,9 +617,28 @@ class MandyocScen:
     
     def selectParticles_bycoords(self, xlim:list=None, zlim:list=None, tsel:float=None, 
                 source_name:str='',target_name:str=''):
-        '''
-        coords : list = [[xmin, xmax],[zmin,zmax]]
-        '''
+        """
+        Selects particles within a specific spatial box at a given timestep.
+
+        Parameters
+        ----------
+        xlim : list of float, optional
+            Horizontal bounds [xmin, xmax]. If None, uses `self.xlimits`.
+        zlim : list of float, optional
+            Vertical bounds [zmin, zmax]. If None, uses `self.zlimits`.
+        tsel : float, optional
+            The specific time (Myr) to perform the spatial selection. 
+            If None, defaults to the first timestep (0).
+        source_name : str, optional
+            Node name in `'/particles/'` to filter from. Defaults to 'original'.
+        target_name : str, optional
+            Node name in `'/particles/'` where the selection will be saved.
+
+        Returns
+        -------
+        MandyocScen
+            Returns the class instance for method chaining.
+        """
         
         if xlim is None: xlim = self.xlimits
         if zlim is None: zlim = self.zlimits
@@ -616,9 +666,26 @@ class MandyocScen:
     
     
     def selectParticles_bylithology(self, lithologies:list, tsel:float=None, source_name:str='',target_name:str=''):
-        '''
-        select particles by lithologies
-        '''
+        """
+        Selects particles based on their lithological phase at a given timestep.
+
+        Parameters
+        ----------
+        lithologies : list of int
+            List of lithology IDs to select.
+        tsel : float, optional
+            The specific time (Myr) to perform the selection. 
+            If None, defaults to 0.
+        source_name : str, optional
+            Node name in `'/particles/'` to filter from. Defaults to 'original'.
+        target_name : str, optional
+            Node name in `'/particles/'` where the selection will be saved.
+
+        Returns
+        -------
+        MandyocScen
+            Returns the class instance for method chaining.
+        """
         
         paths, names,pts0 = self._eval_particles_selection(source_name=source_name,target_name=target_name,get_selection=True)
         source_name, target_name = names
@@ -640,7 +707,26 @@ class MandyocScen:
                                source_name:str='',target_name:str=''):
         
         """
-        [ongoing]
+        Classifies all particles into domains based on X-coordinate ranges at a specific timestep.
+
+        The classification result is stored as a new coordinate variable in the particles dataset.
+
+        Parameters
+        ----------
+        domain_intervals : dict
+            Dictionary defining categories and their X-ranges. Must include 
+            a 'field_name' key (e.g., {'field_name': 'my_domain', 'craton': [0, 100]}).
+        tsel : float, optional
+            The specific time (Myr) for the classification snapshot.
+        source_name : str, optional
+            Node name in `'/particles/'` to classify.
+        target_name : str, optional
+            Node name in `'/particles/'` where the updated dataset is saved.
+
+        Returns
+        -------
+        MandyocScen
+            Returns the class instance for method chaining.
         """
         #Classify all particles based on X ranges, given a time step tsel
         #Categories are based on the domain intervals keys
