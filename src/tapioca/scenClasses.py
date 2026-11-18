@@ -521,9 +521,8 @@ class MandyocScen:
         source_path, target_path = paths
         source_name, target_name = names
 
-        if self.verbose:
-            print(f'Selected particles: {source_name}')
-            print(f'Selection at: {target_name}')
+        self._print_verbose(f'Selected particles: {source_name}')
+        self._print_verbose(f'Selection at: {target_name}')
 
         # Lazy selection
         pts = self.DTree[source_path].ds
