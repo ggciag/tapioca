@@ -715,7 +715,7 @@ class MandyocScen:
         ----------
         domain_intervals : dict
             Dictionary defining categories and their X-ranges. Must include 
-            a 'field_name' key (e.g., {'field_name': 'my_domain', 'craton': [0, 100]}).
+            a 'field_name' key (e.g., {'field_name': 'my_domain', 'necking': [100e3,200e3], 'distal': [200e3, 300e3]}).
         tsel : float, optional
             The specific time (Myr) for the classification snapshot.
         source_name : str, optional
@@ -744,7 +744,7 @@ class MandyocScen:
         except: field_name = 'domain'
         del domain_intervals['field_name']
         
-        typename = type(list(domain_intervals.keys())[1])
+        typename = type(list(domain_intervals.keys())[0])
         if typename is str: typename='U256'
         
         if field_name in pts:
