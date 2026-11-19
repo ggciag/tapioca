@@ -526,8 +526,8 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
             vz = xr.where(vz.z==0, velocbuilder.velocs.top.vz, vz)
             vz = xr.where(vz.z==self.Lz, velocbuilder.velocs.bot.vz, vz)
 
-            self.DTree.fields['vx'] = vx.transpose('z','x')
-            self.DTree.fields['vz'] = vz.transpose('z','x')
+        self.DTree.fields['vx'] = vx.transpose('z','x')
+        self.DTree.fields['vz'] = vz.transpose('z','x')
 
 
         self.DTree.fields['vx'].attrs['units'] = 'm/s'
