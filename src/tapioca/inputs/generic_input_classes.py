@@ -804,7 +804,7 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
                 max_seq = len(seq.strip()) if len(seq.strip()) > max_seq else max_seq
 
         max_seq += 3
-        print(max_seq)
+
         with open(os.path.join(self.path,"interfaces.txt"), "w") as f:
             for line in base_text.split("\n")[:-1]:
                 all_seqs = line.strip().split('  ')

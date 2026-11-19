@@ -12,6 +12,8 @@ license = {file = "LICENSE"}
 
 authors = [
   {name = "João Bueno", email = "jbueno@usp.br"},
+  {name = "João Pedro Macedo", email = ""},
+  {name = "Victor Sacek", email="sacek@usp.br"},
 ]
 
 classifiers = [
