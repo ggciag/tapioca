@@ -901,12 +901,24 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
                       'lx':self.Lx,
                       'lz':-self.Lz,
                       'dimensions':self.dimensions,
-                      'n_interfaces':len(self.DTree.interfaces)-1
+                      'n_interfaces':len(self.DTree.interfaces)-1,
+                      'interfaces_from_ascii': True
                     }
         
         if self.dimensions == 3:
             temp_param['ny'] = self.Ny
             temp_param['ly'] = self.Ly
+
+        # check temperatures and velocity
+        if 'temperature' in self.DTree.fields:
+            temp_param['temperature_from_ascii'] = True
+        else:
+            temp_param['temperature_from_ascii'] = False
+
+        if 'vx' in self.DTree.fields and 'vz' in self.DTree.fields:
+            temp_param['velocity_from_ascii'] = True
+        else:
+            temp_param['velocity_from_ascii'] = False
 
         # check if these parameters were already set in the builder
         for k in list(params_to_check.keys()):
@@ -1234,8 +1246,8 @@ class VelocityFieldBuilder:
             
         if boundary in ['bot', 'top']:
             normal = 1 if boundary == 'top' else -1
-            ranges = [self.x.min()+1.5*self.dx, self.x.max()-1.5*self.dx]
-            width = (self.Lx-3*self.dx) * self.unifac_len
+            ranges = [self.x.min(), self.x.max()]
+            width = (self.Lx) * self.unifac_len
             vz_compensation = (target_flux / width) * normal
             
             # self.scenario._print_verbose(f"Applying compensating Vz = {vz_compensation:.3e} to the {boundary} boundary")
@@ -1244,8 +1256,8 @@ class VelocityFieldBuilder:
 
         elif boundary in ['left', 'right']:
             normal = 1 if boundary == 'right' else -1
-            ranges = [self.z.min()+1.5*self.dz, self.z.max()-1.5*self.dz]
-            width = (self.Lz-3*self.dz) * self.unifac_len
+            ranges = [self.z.min(), self.z.max()]
+            width = abs(self.Lz) * self.unifac_len
             vx_compensation = (target_flux / width) * normal
                        
             # self.scenario._print_verbose(f"Applying compensating Vx = {vx_compensation:.3e} to the {boundary} boundary")

@@ -228,7 +228,11 @@ PARAMS_TYPES = {
     ## Magmatism
     'magmatism':str, 
     'magmatism_extraction':str, 
-    'magmatic_layer':str, 
+    'magmatic_layer':str,
+    'magmatism_Ts0':float,
+    'magmatism_dTdP':float,
+    'magmatism_dTdX':float,
+    'magmatism_dS':float, 
 
     ## Numerical
     'multigrid':int,
