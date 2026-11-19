@@ -1626,21 +1626,41 @@ class TemperatureFieldBuilder:
 
     def apply_linear_temperature(self, t_pot:float=1350.0):
         '''
-        Initialise ``temperature`` from a linear geotherm and a mantle adiabat.
+        Initialise ``temperature`` from a linear lithospheric geotherm and a mantle adiabat.
 
-        This method must be called before any solver
-        (`solve_heat_column`, `solve_heat_1D`,
-        `solve_heat_2D`, `solve_heat_diffusion2D`), because the
-        solvers read ``self.t_pot`` — which is only set here — to build
-        their boundary conditions.
+        Constructs a 2D initial thermal field across the domain by combining a
+        conductive linear gradient above the Lithosphere–Asthenosphere Boundary (LAB)
+        with an adiabatic gradient in the underlying asthenospheric mantle.
+
+        This method must be called **after** defining ``self.lithosphere_thickness``
+        (a 1D profile of length ``Nx`` representing the LAB depth along ``x``) and
+        **before** running any thermal solver (``solve_heat_column``, ``solve_heat_1D``,
+        ``solve_heat_2D``, ``solve_heat_diffusion2D``), as the solvers read
+        ``self.t_pot``—which is set here—to build their boundary conditions.
 
         Parameters
         ----------
+        t_pot : float, optional
+            The mantle potential temperature (extrapolated to the surface,
+            :math:`z_{\\text{corr}} = 0`), in °C. Default is ``1350.0``.
 
-        t_pot: float, optional
-            The potential temperature of the mantle, in °C.
-            
-            Default is 1350.0.
+        Returns
+        -------
+        TemperatureFieldBuilder
+            Returns ``self`` with ``self.temperature`` updated (units set to
+            ``'deg C'``) to enable method chaining.
+
+        Notes
+        -----
+        **Mantle Adiabatic Profile**:
+           In the convecting asthenosphere, temperature follows an exponential
+           adiabat controlled by gravity :math:`g` (``self.g < 0``), thermal
+           expansivity :math:`\\alpha` (``self.alpha``), and specific heat capacity
+           :math:`c_p` (``self.c_cap``):
+
+           .. math::
+
+              T_{\\text{adiab}}(z) = \\frac{T_{\\text{pot}}}{\\exp\\left(\\frac{g \\, \\alpha \\, (-z_{\\text{corr}})}{c_p}\\right)}
         '''
         self.t_pot = t_pot
 
