@@ -14,7 +14,7 @@ import scipy.sparse as sp
 from  scipy.sparse.linalg import bicgstab, spsolve
 
 from .._variables import VARS_TYPES, PARAMS_TYPES, VARIABLES_LIST, INTERFACES_PARAMETERS,DEFAULT_MATERIAL,MATERIAL_PARAMETERS,PARAMETERS_UNITS,SEC_PER_YEAR
-from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, build_diagonals_2D, spsolve_heat_col, get_interface, _numba_diffusion_loop, _Druker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
+from .._aux_functions import read_params, evaluate_params, ensure_directory_exists, build_diagonals_2D, spsolve_heat_col, get_interface, _numba_diffusion_loop, _Drucker_Prager_YS, _Byerlee_law_YS, _visc_dislocation_creep
 
 __all__ = ['MandyocBuilder','TemperatureFieldBuilder','VelocityFieldBuilder']
 
@@ -618,7 +618,7 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
 
         return self
 
-    def calculate_YSE(self, plastic:str='druker-prager', viscous:str='dislocation', **kargs):
+    def calculate_YSE(self, plastic:str='drucker-prager', viscous:str='dislocation', **kargs):
         '''
         Calculate the Yield Stress Envelope considering the viscoplastic rheology adopted in Mandyoc (initial and softened). 
         Furthermore, this function creates the plastic and viscous YSE and stores it in the `fields` dataset.
@@ -682,17 +682,17 @@ class MandyocBuilder(GeometryDomain,VerboseExtension):
         c = self.DTree.fields.cohesion_max  #cohesion initial
         c_soft = self.DTree.fields.cohesion_min  #after strain softening
         
-        if plastic.lower() == 'druker-prager':
+        if plastic.lower() == 'drucker-prager':
             phi = self.DTree.fields.friction_angle_max #friction angle
             phi_soft = self.DTree.fields.friction_angle_min #after strain softening
 
-            self.DTree.fields['plastic_YSE'] = _Druker_Prager_YS(c, phi, P)
-            self.DTree.fields['plastic_YSE_soft'] = _Druker_Prager_YS(c_soft, phi_soft, P)
+            self.DTree.fields['plastic_YSE'] = _Drucker_Prager_YS(c, phi, P)
+            self.DTree.fields['plastic_YSE_soft'] = _Drucker_Prager_YS(c_soft, phi_soft, P)
 
-            self.DTree.fields['plastic_YSE'].attrs['method'] = 'Druker-Prager'
-            self.DTree.fields['plastic_YSE_soft'].attrs['method'] = 'Druker-Prager'
+            self.DTree.fields['plastic_YSE'].attrs['method'] = 'Drucker-Prager'
+            self.DTree.fields['plastic_YSE_soft'].attrs['method'] = 'Drucker-Prager'
 
-            self._print_verbose('Plastic rheology: Druker-Prager Criterion')
+            self._print_verbose('Plastic rheology: Drucker-Prager Criterion')
 
         elif plastic.lower() == 'byerlee':
             mu = kargs.get('mu',0.6) #generic values

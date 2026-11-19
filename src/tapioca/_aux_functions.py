@@ -14,7 +14,7 @@ from ._variables import SEC_PER_YEAR, VARIABLES_LIST, INTERFACES_PARAMETERS,PARA
 
 __all__ = ["read_params","evaluate_params","read_data","ensure_directory_exists","export_compressed_dataset","export_compressed_datatree",
            "_numba_diffusion_loop","build_diagonals_2D","spsolve_heat_col",
-           "_Druker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
+           "_Drucker_Prager_YS","_Byerlee_law_YS","_visc_dislocation_creep"]
 
 def read_params(path_param:str)->dict:
     '''
@@ -383,9 +383,9 @@ def build_diagonals_2D(Nz, Nx, dz, dx, k_2D, H_2D, T_top,ZZ,Tmesh,lab_surf,bot_b
             
     return diag_down, diag_left, diag_main, diag_right, diag_up, b
 
-def _Druker_Prager_YS(c:float, Phi:float, P:float):
+def _Drucker_Prager_YS(c:float, Phi:float, P:float):
     '''
-    Gives the plastic Yield Stress (in Pa) according to the Druker-Prager criterion:
+    Gives the plastic Yield Stress (in Pa) according to the Drucker-Prager criterion:
 
     Tau_yield = c * cos(phi) + P * sin(phi)
 
